@@ -46,7 +46,7 @@ class Provider:
     def __init__(self, model: str, endpoint: str, api_key: str | None = None,
                  timeout: int = 180, max_tokens: int = 1024,
                  temperature: float = 0.2, context: int = 0,
-                 keep_alive: str = ""):
+                 keep_alive: str = "", seed: int | None = None):
         self.model = model
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
@@ -55,6 +55,9 @@ class Provider:
         self.temperature = temperature
         self.context = context
         self.keep_alive = keep_alive
+        #: a fixed seed makes a local model give the same answer to the same
+        #: prompt, run after run (with temperature 0 and no reused prompt cache)
+        self.seed = seed
 
     # -- public ---------------------------------------------------------
 

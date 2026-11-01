@@ -293,17 +293,27 @@ def check_ollama(endpoint: str, model: str) -> None:
         die("Ollama has no model %r. It has: %s" % (model, ", ".join(sorted(have))))
 
 
+def run_seed(args) -> int:
+    """--seed, or 7 for the xray who's who so the same book gives the same
+    list every run; -1 leaves the server's own sampling."""
+    seed = getattr(args, "seed", None)
+    if seed is None:
+        seed = 7 if getattr(args, "cast_method", "") == "xray" else -1
+    return seed
+
+
 def write_config(args) -> Path:
     BACKUPS.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(
         "# written by grimmory_recaps.py; edit the command line, not this file\n"
         "[ai]\nprovider = \"%s\"\nmodel = \"%s\"\nendpoint = \"%s\"\n"
-        "timeout = 300\nmax_tokens = 1500\nconcurrency = %d\n\n"
+        "timeout = 300\nmax_tokens = 1500\nconcurrency = %d\nseed = %d\n\n"
         "[recaps]\nenabled = true\npassage_words = %d\ncast = true\n"
         "main_character = %s\n"
         "cast_only = %s\nkeep_recaps = %s\n"
         "cast_method = %s\ncast_report_dir = %s\nseries_dir = %s\n"
-        % (args.provider, args.model, args.endpoint, args.concurrency, args.passage_words,
+        % (args.provider, args.model, args.endpoint, args.concurrency, run_seed(args),
+           args.passage_words,
            json.dumps(args.main_character or ""),
            "true" if getattr(args, "characters_only", False) else "false",
            "true" if getattr(args, "keep_recaps", False) else "false",
@@ -711,8 +721,12 @@ def main(argv=None) -> int:
                         "without them get recaps in full (implies --force)")
     r.add_argument("--cast-method", choices=("passages", "book", "facts", "xray"), default="passages",
                    help="book: write the who's who from the whole book (names from "
-                        "the text, one checked entry per person); with "
+                        "the text, one checked entry per person); xray: chapter by "
+                        "chapter, every change backed by a quote from the book; with "
                         "--characters-only the passages are not read again")
+    r.add_argument("--seed", type=int, default=None,
+                   help="fixed sampling seed for a local model (default: 7 with "
+                        "--cast-method xray, otherwise none)")
     r.add_argument("--cast-report", default="",
                    help="with --cast-method book, write <book>.cast.txt into this "
                         "folder: what was found, set aside and written")

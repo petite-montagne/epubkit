@@ -618,11 +618,13 @@ class RecapStage(Stage):
         # each passage's answer. With the recap text kept, the passages are
         # not read at all.
         method = getattr(rc, "cast_method", "passages")
-        book_cast = rc.cast and method in ("book", "facts")
+        book_cast = rc.cast and method in ("book", "facts", "xray")
 
         def whole_book_cast():
             if method == "facts":
                 from . import cast_facts as book
+            elif method == "xray":
+                from . import cast_xray as book
             else:
                 from . import cast as book
 

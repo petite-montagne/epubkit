@@ -76,6 +76,10 @@ class AIConfig:
     #: Ollama only: how long the model stays loaded after a request, so it is
     #: not reloaded between books. "" leaves it to Ollama (5 minutes).
     keep_alive: str = "30m"
+    #: local models only: a fixed seed (with top-k 1 and no reused prompt
+    #: cache) so the same book gives the same answers every run. -1 leaves
+    #: the server's own sampling.
+    seed: int = -1
 
     def resolved_model(self) -> str:
         return self.model or DEFAULT_MODEL.get(self.provider, "")
@@ -201,7 +205,11 @@ class RecapConfig:
     #: epubkit/stages/cast.py); or facts: the series' names list decides who
     #: is listed and entries are written from facts gathered chapter by
     #: chapter (epubkit/stages/cast_facts.py; without a names list it is
-    #: "book"). With cast_only, "book" and "facts" do not read the passages
+    #: "book"); or xray: chapter by chapter, code decides who is checked, the
+    #: model says what changed for each, and every change must quote the
+    #: book (epubkit/stages/cast_xray.py; English only, else "book"). Set
+    #: ai.seed too so runs repeat. With cast_only, "book", "facts" and
+    #: "xray" do not read the passages
     cast_method: str = "passages"
     #: with cast_method = "book", write what it did with each book, and every
     #: entry, to <this folder>/<book>.cast.txt. Empty: no report

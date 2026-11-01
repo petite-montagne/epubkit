@@ -66,6 +66,12 @@ class OpenAIProvider(Provider):
             # Local OpenAI-compatible servers (llama.cpp): skip the thinking
             # pass so it doesn't eat max_tokens before the answer starts.
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+            if self.seed is not None and self.seed >= 0:
+                # llama.cpp: the same prompt gets the same answer. A reused
+                # prompt cache and batching shift the numbers enough to change
+                # words at temperature 0 (Nov 2026: two runs of one book
+                # disagreed until these were set).
+                payload.update(seed=self.seed, top_k=1, cache_prompt=False)
         headers = {}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
@@ -97,6 +103,8 @@ class OllamaProvider(Provider):
         options = {"temperature": self.temperature, "num_predict": self.max_tokens}
         if self.context:
             options["num_ctx"] = self.context
+        if self.seed is not None and self.seed >= 0:
+            options.update(seed=self.seed, top_k=1)
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -164,4 +172,5 @@ def build(ai_config) -> Provider:
         temperature=ai_config.temperature,
         context=getattr(ai_config, "context", 0),
         keep_alive=getattr(ai_config, "keep_alive", ""),
+        seed=getattr(ai_config, "seed", None),
     )
