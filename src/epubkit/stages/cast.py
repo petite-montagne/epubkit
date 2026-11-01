@@ -767,7 +767,7 @@ def wiki_problems(entry: str, name: str, facts, words: dict) -> list[tuple[str, 
     for i, x in enumerate(sentences(entry)):
         # what they are: only in the opening words, before "who", a comma...
         if i == 0 and mine:
-            head = re.split(r",|;| who | that | and | qui | et ", x, 1)[0].lower()
+            head = re.split(r",|;| who | that | and | qui | et ", x, maxsplit=1)[0].lower()
             said = [k for k in kinds if re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(k), head)]
             if said and not any(k in mine for k in said):
                 out.append((x, say["kind"].format(name=name, wrong=said[0],

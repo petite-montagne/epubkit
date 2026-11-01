@@ -678,7 +678,7 @@ def test_known_mistakes_can_be_put_to_the_model_without_the_book(tmp_path):
     def ask(prompt, system, usable):
         return model.complete(prompt, system).text
     got, _r, _s = C.build(M._Ctx(), [], ask, facts=facts, probe=cases)
-    assert [M.score(c, e)[0] for c, e in zip(cases, got)] == ["right", "right"]
+    assert [M.score(c, e)[0] for c, e in zip(cases, got, strict=True)] == ["right", "right"]
     assert M.score(cases[0], "A human crawler.")[0] == "wrong"
     assert M.score(cases[0], None)[0] == "lost"
 

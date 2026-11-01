@@ -505,7 +505,7 @@ class Facts:
             self.owner.setdefault(name.lower(), name)
             if fact == "alias" and value:
                 self.owner.setdefault(value.lower(), name)
-        for name, fact, value in rows:
+        for _name, fact, value in rows:
             if value and fact not in ("alias", "species"):
                 self.owner.setdefault(value.lower(), value)     # kin with no row of their own
         for name, fact, value in rows:
