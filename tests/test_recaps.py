@@ -783,3 +783,21 @@ def test_a_tape_records_every_reply_and_replays_it(tmp_path, monkeypatch):
     assert b.ask(P(), "q1", "s") == "answer to q1"
     assert b.ask(P(), "q3", "s") == ""          # not on the tape: never asked
     assert P.calls == 2 and (b.played, b.missed) == (1, 1)
+
+
+def test_a_replay_still_matches_a_passage_when_the_known_list_changed(tmp_path, monkeypatch):
+    from epubkit.stages import recaps as R
+
+    class P:
+        def complete(self, prompt, system=""):
+            return type("A", (), {"text": "reply"})()
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EPUBKIT_TAPE", str(tmp_path / "tape"))
+    R._Answers(tmp_path / "b.epub", "m", enabled=False).ask(P(), "KNOWN: Carl\n<<<text>>>", "s")
+    monkeypatch.delenv("EPUBKIT_TAPE")
+    monkeypatch.setenv("EPUBKIT_REPLAY", str(tmp_path / "tape"))
+    monkeypatch.setenv("EPUBKIT_REPLAY_ONLY", "1")
+    b = R._Answers(tmp_path / "b.epub", "m", enabled=False)
+    assert b.ask(P(), "KNOWN: Carl, Donut\n<<<text>>>", "s") == "reply"
+    assert b.ask(P(), "KNOWN: Carl\n<<<other>>>", "s") == ""

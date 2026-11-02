@@ -1249,18 +1249,28 @@ class _Answers:
         raw = "\0".join((self.model, system or "", prompt))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    def _loose(self, prompt: str, system: str) -> str:
+        """The passage a question is about (between <<< and >>>), without the
+        list of who is known so far. A code change upstream rewrites that
+        list for every later question, so an exact-match tape stops matching
+        from the first change on (book 3 of a replay got 0 of 67 replies);
+        matched by its passage the reply still answers the same text."""
+        m = re.search(r"<<<(.*?)>>>", prompt, re.S)
+        return self._key("loose\0" + m.group(1), system) if m else ""
+
     def ask(self, provider, prompt: str, system: str, usable=None) -> str:
         key = self._key(prompt, system)
+        loose = self._loose(prompt, system)
         if key in self.got:
-            return self._taped(key, self.got[key])
-        if self.replay is not None and key in self.replay:
+            return self._taped(key, self.got[key], loose)
+        if self.replay is not None and (key in self.replay or loose in self.replay):
             self.played += 1
-            return self._taped(key, self.replay[key])
+            return self._taped(key, self.replay.get(key) or self.replay[loose], loose)
         if self.replay is not None:
             self.missed += 1
             if self.replay_only:
                 return ""
-        text = self._taped(key, provider.complete(prompt, system=system).text)
+        text = self._taped(key, provider.complete(prompt, system=system).text, loose)
         if self.enabled and (usable is None or usable(text)):
             with self.lock:
                 self.got[key] = text
@@ -1272,12 +1282,14 @@ class _Answers:
                     pass                    # resuming is a bonus, not a need
         return text
 
-    def _taped(self, key: str, text: str) -> str:
+    def _taped(self, key: str, text: str, loose: str = "") -> str:
         if self.tape is not None:
             with self.lock:
                 try:
                     with open(self.tape, "a", encoding="utf-8") as fh:
                         fh.write(json.dumps({"k": key, "text": text}) + "\n")
+                        if loose:
+                            fh.write(json.dumps({"k": loose, "text": text}) + "\n")
                 except OSError:
                     pass
         return text
