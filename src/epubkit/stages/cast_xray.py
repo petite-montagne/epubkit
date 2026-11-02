@@ -777,6 +777,16 @@ class _Run:
                 continue
             if not titled(name) or not titled(x) or plain(name) == plain(x):
                 return True
+        # a job the book also writes in lower case, used as a title:
+        # "Ringmaster Grimaldi" / "Grimaldi" ("the ringmaster said")
+        p = plain(norm(name)).split()
+        for x in self.names(k):
+            q = plain(x).split()
+            s, lg = (p, q) if len(p) < len(q) else (q, p)
+            if s and len(lg) == len(s) + 1 and lg[1:] == s and len(lg[0]) >= 4 \
+                    and lg[0] not in STOPW and re.search(r"(?<![.!?\"“]\s)\b%s\b"
+                                                         % re.escape(lg[0]), self.book):
+                return True
         return False
 
     def extends(self, k, name, ptext):

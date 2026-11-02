@@ -362,6 +362,11 @@ def test_a_title_added_or_dropped_is_the_same_person():
     r.known["Glass Wizard"] = dict(aliases=[], type="person", first="A wizard.", change="",
                                    narrator=False)
     assert r.retitled("Mexx-6000", "Mexx")
+    r.known["Grimaldi"] = dict(aliases=[], type="person", first="A boss.", change="",
+                               narrator=False)
+    r.book += " The ringmaster bowed."
+    assert r.retitled("Grimaldi", "Ringmaster Grimaldi")
+    assert not r.retitled("Grimaldi", "Wizard Grimaldi")
     assert r.named_as("The Glass Wizard who sent a letter.", "Ghazi") == "Glass Wizard"
     assert r.named_as("A man who met the Glass Wizard.", "Ghazi") is None
     assert X.carry_split("rock monster bodyguard. Now a guard.")[0] == "Rock monster bodyguard."
