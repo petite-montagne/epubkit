@@ -635,6 +635,10 @@ class RecapStage(Stage):
                 view=view, title=_book_title(ctx.path),
                 workers=max(1, ctx.config.ai.concurrency), names_list=names_list,
                 facts=facts)
+            if answers.replay is not None:
+                report = list(report) + ["replay: %d replies from the tape, %d not on it%s"
+                                         % (answers.played, answers.missed,
+                                            " (left empty)" if answers.replay_only else "")]
             for line in report:
                 ctx.note("who's who: " + line)
             _cast_report(rc, ctx.path, report, people)
@@ -1187,6 +1191,21 @@ def _book_title(book: Path) -> str:
 # ------------------------------------------------------------ resuming
 
 
+def _read_answers(path: Path) -> dict:
+    got: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                    got[d["k"]] = d["text"]
+                except (ValueError, KeyError, TypeError):
+                    continue            # a line cut short by a crash
+    except OSError:
+        pass
+    return got
+
+
 class _Answers:
     """The model's replies for one book, kept on disk until the book is written.
 
@@ -1204,18 +1223,27 @@ class _Answers:
         self.enabled = enabled
         self.lock = threading.Lock()
         self.got: dict[str, str] = {}
+        # A tape: every reply of a run, kept per book (EPUBKIT_TAPE=dir), so
+        # a code change can be tried again on the same replies in minutes
+        # (EPUBKIT_REPLAY=dir) instead of hours of model time. With
+        # EPUBKIT_REPLAY_ONLY=1 a question not on the tape gets an empty
+        # reply instead of going to the model, and is counted.
+        self.tape = self.replay = None
+        self.played = self.missed = 0
+        self.replay_only = os.environ.get("EPUBKIT_REPLAY_ONLY", "") not in ("", "0")
+        stem = Path(book).stem + ".jsonl"
+        if os.environ.get("EPUBKIT_TAPE"):
+            self.tape = Path(os.environ["EPUBKIT_TAPE"]).expanduser() / stem
+            try:
+                self.tape.parent.mkdir(parents=True, exist_ok=True)
+                self.tape.write_text("", encoding="utf-8")
+            except OSError:
+                self.tape = None
+        if os.environ.get("EPUBKIT_REPLAY"):
+            self.replay = _read_answers(Path(os.environ["EPUBKIT_REPLAY"]).expanduser() / stem)
         if not enabled:
             return
-        try:
-            with open(self.path, encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        d = json.loads(line)
-                        self.got[d["k"]] = d["text"]
-                    except (ValueError, KeyError, TypeError):
-                        continue            # a line cut short by a crash
-        except OSError:
-            pass
+        self.got = _read_answers(self.path)
 
     def _key(self, prompt: str, system: str) -> str:
         raw = "\0".join((self.model, system or "", prompt))
@@ -1224,8 +1252,15 @@ class _Answers:
     def ask(self, provider, prompt: str, system: str, usable=None) -> str:
         key = self._key(prompt, system)
         if key in self.got:
-            return self.got[key]
-        text = provider.complete(prompt, system=system).text
+            return self._taped(key, self.got[key])
+        if self.replay is not None and key in self.replay:
+            self.played += 1
+            return self._taped(key, self.replay[key])
+        if self.replay is not None:
+            self.missed += 1
+            if self.replay_only:
+                return ""
+        text = self._taped(key, provider.complete(prompt, system=system).text)
         if self.enabled and (usable is None or usable(text)):
             with self.lock:
                 self.got[key] = text
@@ -1235,6 +1270,16 @@ class _Answers:
                         fh.write(json.dumps({"k": key, "text": text}) + "\n")
                 except OSError:
                     pass                    # resuming is a bonus, not a need
+        return text
+
+    def _taped(self, key: str, text: str) -> str:
+        if self.tape is not None:
+            with self.lock:
+                try:
+                    with open(self.tape, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"k": key, "text": text}) + "\n")
+                except OSError:
+                    pass
         return text
 
     def forget(self) -> None:

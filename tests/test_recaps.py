@@ -758,3 +758,28 @@ def test_numbered_file_names_are_not_another_book():
     assert _story_end(calibre) == 97
     circe = ["OEBPS/s%03d-chapter.xhtml" % i for i in range(36)]
     assert _story_end(circe) == 35
+
+
+def test_a_tape_records_every_reply_and_replays_it(tmp_path, monkeypatch):
+    from epubkit.stages import recaps as R
+
+    class P:
+        calls = 0
+
+        def complete(self, prompt, system=""):
+            P.calls += 1
+            return type("A", (), {"text": "answer to " + prompt})()
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EPUBKIT_TAPE", str(tmp_path / "tape"))
+    a = R._Answers(tmp_path / "book.epub", "m", enabled=False)
+    assert a.ask(P(), "q1", "s") == "answer to q1"
+    assert a.ask(P(), "q2", "s") == "answer to q2"
+    assert P.calls == 2
+    monkeypatch.delenv("EPUBKIT_TAPE")
+    monkeypatch.setenv("EPUBKIT_REPLAY", str(tmp_path / "tape"))
+    monkeypatch.setenv("EPUBKIT_REPLAY_ONLY", "1")
+    b = R._Answers(tmp_path / "book.epub", "m", enabled=False)
+    assert b.ask(P(), "q1", "s") == "answer to q1"
+    assert b.ask(P(), "q3", "s") == ""          # not on the tape: never asked
+    assert P.calls == 2 and (b.played, b.missed) == (1, 1)
