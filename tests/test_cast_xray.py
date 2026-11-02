@@ -338,6 +338,23 @@ def test_name_forms():
     assert not X.variant("Fire Brandy", "Tizquick")
     assert not X.variant("Miriam Dom", "Sierra")
     assert not X.variant("Draven Holt", "Corvin Holt")
+    # one name spelt two ways
+    assert X.variant("Lucia Marr", "Lucia Mar")
+    assert X.variant("Vincente", "Vicente")
+    assert not X.variant("Lena", "Lina")
+    assert not X.variant("Lucia Marr", "Lucio Mar")
+
+
+def test_a_title_added_or_dropped_is_the_same_person():
+    r = X._Run(Ctx(), DOCS, Model(), "", False)
+    for k in ("Donut", "Henrik", "Draven Holt", "Mr. Kell"):
+        r.known[k] = dict(aliases=[], type="person", first="Someone.", change="",
+                          narrator=False)
+    assert r.retitled("Donut", "Princess Donut")
+    assert r.retitled("Henrik", "King Henrik")
+    assert not r.retitled("Draven Holt", "Mr. Holt")
+    assert not r.retitled("Mr. Kell", "Mrs. Kell")
+    assert not r.retitled("Donut", "Mongo")
     assert X.linked("Psamathe", "Samantha", "The goddess Psamathe, now called Samantha, smiled.")
     assert X.linked("Riddle", "Lord Voldemort", "Riddle said, “I am Lord Voldemort.”")
     assert not X.linked("Fire Brandy", "Tizquick", "Fire Brandy and Tizquick drove the train.")

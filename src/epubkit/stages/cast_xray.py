@@ -429,7 +429,29 @@ def variant(a: str, b: str) -> bool:
     if len(s) == 1 and min(len(s[0]), len(lg[0])) >= 3 and s[0] != lg[0] \
             and (lg[0].startswith(s[0]) or s[0].startswith(lg[0])):
         return True
-    return False
+    return misspelt(wa, wb)
+
+
+def one_letter(a: str, b: str) -> bool:
+    """b is a with one letter added or left out, not a plural "s"."""
+    if len(a) > len(b):
+        a, b = b, a
+    if len(b) != len(a) + 1 or b == a + "s":
+        return False
+    return any(b[:i] + b[i + 1:] == a for i in range(len(b)))
+
+
+def misspelt(wa: list, wb: list) -> bool:
+    """One name spelt two ways: same words but one, and that one differs by a
+    single added or dropped letter ("Lucia Marr" / "Lucia Mar", "Vincente" /
+    "Vicente"). A lone name needs 5+ letters so short names stay apart."""
+    if len(wa) != len(wb):
+        return False
+    diff = [(x, y) for x, y in zip(wa, wb, strict=True) if x != y]
+    if len(diff) != 1:
+        return False
+    x, y = diff[0]
+    return min(len(x), len(y)) >= (5 if len(wa) == 1 else 3) and one_letter(x, y)
 
 
 LINK = r"(?:(?:also|now|later|then|usually|often|sometimes|simply) )?(?:called|known as|named|nicknamed|aka|or|alias|whose (?:real |true )?name (?:is|was))"
@@ -722,6 +744,25 @@ class _Run:
         return any(same_family(x, y) for x in a_names for y in b_names) or \
             kin_of(a_desc, b_names) or kin_of(b_desc, a_names)
 
+    def retitled(self, k, name):
+        """The same name with a title only one side carries ("Princess Donut" /
+        "Donut", "King Henrik" / "Henrik"): one person, no need to ask. Two
+        different titles, or Mr./Mrs. with a family name alone ("Mr. Holt"),
+        still go to the guard."""
+        def family_only(n):
+            return bool(honor(n)) and surname_only(n)
+        b = bare(norm(name))
+        if not b or family_only(norm(name)):
+            return False
+        for x in self.names(k):
+            if bare(x) != b or family_only(x):
+                continue
+            if honor(name) and honor(x) and honor(name) != honor(x):
+                continue
+            if not titled(name) or not titled(x) or plain(name) == plain(x):
+                return True
+        return False
+
     def extends(self, k, name, ptext):
         """A bare given name that starts this one known full name, both used
         so far, and no one else's name starts with that word."""
@@ -929,6 +970,11 @@ class _Run:
             self.log.append("family %s | %s: kept apart" % (hit, name))
             self.never.add(frozenset((hit, name)))
             hit = None
+        if hit and self.retitled(hit, name):
+            main_name = self._grow(hit, name, aliases)
+            self.log.append("joined %s + %s -> %s (same name, title added or dropped)"
+                            % (hit, name, main_name))
+            return
         if hit and self.extends(hit, name, ptext):
             main_name = self._grow(hit, name, aliases)
             self.log.append("joined %s + %s -> %s (given name grows)" % (hit, name, main_name))
