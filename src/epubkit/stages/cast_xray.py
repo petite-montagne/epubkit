@@ -44,7 +44,7 @@ from . import cast as C
 
 PASSAGE = 16000
 DESC = 90
-FIRST_WORDS, CHANGE_WORDS = 24, 16
+FIRST_WORDS, CHANGE_WORDS, CARRY_WORDS = 24, 16, 40
 CHECK_MAX, UNLISTED_MAX, PAIR_MAX = 12, 10, 6
 CAP = r"[A-Z][A-Za-z'’\-]+"
 TITLE_WORDS = (r"Mr|Mrs|Ms|Miss|Mister|Madam|Madame|Dr|Doctor|Professor|Uncle|Aunt|Auntie|Sir|Lady|Lord|"
@@ -162,9 +162,19 @@ NOT_NAMES = {"He", "She", "They", "It", "I", "We", "You", "Then", "And", "But", 
              "Madam"}
 BACK = re.compile(r"^\W*(also by|other (books|titles) by|books (by|from)|more (books|from)|"
                   r"about the authors?|acknowledg|copyright|newsletter|praise for|reading group|"
+                  r"afterword|author.?s note|a note from the author|special thanks|thank you|"
+                  r"patreon|backers|"
                   r"discussion (questions|guide)|(an )?excerpt|preview|sneak peek|read on\b|"
                   r"coming soon|a sample|bonus (chapter|content)|titles available|keep reading|"
                   r"turn the page|don.t miss)", re.I)
+
+#: the author's own pages before the story starts
+FRONT = re.compile(r"^\W*(acknowledg|dedicat|foreword|preface|introduction|author.?s note|"
+                   r"a note from|note to (the )?reader|copyright|contents|table of contents|"
+                   r"title page|also by|praise for|special thanks|thank you|patreon|backers|"
+                   r"epigraph|maps?\b)", re.I)
+PRONOUNS = {"i", "me", "my", "we", "us", "you", "he", "him", "she", "her", "they", "them", "it",
+            "narrator", "the narrator"}
 
 SYSTEM = ("You keep a spoiler-free list of the people in a novel for a reader. "
           "Work ONLY from the text you are given. Even if you recognise the book, "
@@ -179,13 +189,14 @@ NEW TEXT:
 >>>
 {check}{unlisted}
 Return JSON only, in this shape:
-{{"new": [{{"name": "...", "type": "...", "aliases": ["..."], "who": "...", "evidence": "..."}}],
+{{"new": [{{"name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "...", "evidence": "..."}}],
   "updates": [{{"name": "...", "status": "SAME or CHANGED", "now": "...", "event": "...", "other": "...", "quote": "..."}}]}}
 
 Rules for "new":
 - Every named individual in the NEW TEXT who is not in KNOWN PEOPLE{and_unlisted}.
-- "type": one of person, creature, animal, ai, god, monster, company, place, item, group, title.
-- "name": the fullest name the text gives. "aliases": other names the text uses for the same individual. Never pronouns. A shared surname is not an alias.
+- "type": one of person, creature, animal, ai, god, monster, company, place, item, group, kind, title, reference.
+- "one": "yes" only for one particular individual in this story. "no" for a kind of creature, species, race, job or monster type, a group or crowd, a real person or character from outside this story who is only mentioned in a comparison or joke, and the book's author or people the author thanks.
+- "name": the fullest name the text gives, never a pronoun or "the narrator" (use the narrator's name). "aliases": other names the text uses for the same individual. Never pronouns. A shared surname is not an alias.
 - "who": ONE sentence (under 25 words) on who they are: their lasting role and relation to the main characters, from this text only. Not their mood or what they are doing right now.
 - "evidence": a short exact quote (under 20 words) from the NEW TEXT that names them.
 Rules for "updates" (one per CHECK name, no others):
@@ -364,6 +375,54 @@ def same_family(a: str, b: str) -> bool:
     return len(wa) >= 2 and len(wb) >= 2 and wa[-1] == wb[-1] and wa[0] != wb[0]
 
 
+def variant(a: str, b: str) -> bool:
+    """Two forms of one name, by their words alone: titles and ranks aside,
+    one's words are among the other's ("Katia" / "Katia Grim", "Big Tina" /
+    "Tina"), or a one-word name begins the other's first word or the other
+    way round ("Bea" / "Miss Beatrice", "Gwen" / "Gwendolyn Duet", "Sledge" /
+    "Sledgie")."""
+    wa, wb = bare(a).split(), bare(b).split()
+    if not wa or not wb:
+        return False
+    if wa == wb:
+        return True
+    s, lg = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    if len(s) < len(lg) and set(s) <= set(lg) and len("".join(s)) >= 2 \
+            and not all(w in STOPW for w in s):
+        return True
+    if len(s) == 1 and min(len(s[0]), len(lg[0])) >= 3 and s[0] != lg[0] \
+            and (lg[0].startswith(s[0]) or s[0].startswith(lg[0])):
+        return True
+    return False
+
+
+LINK = r"(?:(?:also|now|later|then|usually|often|sometimes|simply) )?(?:called|known as|named|nicknamed|aka|or|alias|whose (?:real |true )?name (?:is|was))"
+
+
+def linked(a: str, b: str, text: str) -> bool:
+    """The text itself says a and b are one: "X, also known as Y", "X (Y)",
+    "Y's real name was X", "I am X" said where Y speaks."""
+    t = squash(text)
+    x, y = squash(a), squash(b)
+    if not x or not y:
+        return False
+    ex, ey = re.escape(x), re.escape(y)
+    for p, q in ((ex, ey), (ey, ex)):
+        if re.search(r"\b%s\b %s (?:the )?%s\b" % (p, LINK, q), t) or \
+                re.search(r"\b%s\s*\(\s*%s\s*\)" % (p, q), text.lower()) or \
+                re.search(r"\b%s s (?:real|true) name (?:is|was) %s\b" % (p, q), t):
+            return True
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        st = squash(sent)
+        if re.search(r"\b(?:i am|i m|my name is|call me) %s\b" % ey, st) and \
+                re.search(r"\b%s\b" % ex, st):
+            return True
+        if re.search(r"\b(?:i am|i m|my name is|call me) %s\b" % ex, st) and \
+                re.search(r"\b%s\b" % ey, st):
+            return True
+    return False
+
+
 def parse(text: str) -> dict:
     m = re.search(r"\{.*\}", text or "", re.S)
     try:
@@ -407,8 +466,23 @@ def chapter_no(label: str, head: str):
 
 
 def story_parts(docs, log: list):
-    """The book's own documents: stop at back matter, a sample or the next
-    book's chapter 1 in the second half."""
+    """The book's own documents: the author's pages before the story are
+    skipped (dedication, preface, thanks), and it stops at back matter, a
+    sample or the next book's chapter 1 in the second half."""
+    first = next((i for i, (_o, _p, label, ps) in enumerate(docs[:max(3, len(docs) // 3)])
+                  if chapter_no(label or "", " ".join(t for _n, t in ps[:2])[:200]) is not None),
+                 None)
+    lead = 0
+    for i, (o, _p, label, ps) in enumerate(docs[:first if first is not None
+                                                 else max(1, len(docs) // 4)]):
+        head = " ".join(t for _n, t in ps[:2])[:200]
+        if FRONT.match(label or "") or FRONT.match(head) or \
+                (first is not None and sum(len(t) for _n, t in ps) < 1500):
+            log.append("skip order %d %r: before the story" % (o, label or head[:40]))
+            lead = i + 1
+        else:
+            break
+    docs = docs[lead:]
     keep, top, cut = [], 0, None
     for i, (_o, _p, label, ps) in enumerate(docs):
         head = " ".join(t for _n, t in ps[:2])[:200]
@@ -482,11 +556,11 @@ def build(ctx, docs, ask, *, hero: str = "", first_person: bool = False,
         return C.build(ctx, docs, ask, hero=hero, first_person=first_person, lang=lang,
                        view=view, title=title, workers=workers, names_list=names_list,
                        facts=facts, probe=probe)
-    return _Run(ctx, docs, ask, hero, first_person).go()
+    return _Run(ctx, docs, ask, hero, first_person, view).go()
 
 
 class _Run:
-    def __init__(self, ctx, docs, ask, hero, first_person):
+    def __init__(self, ctx, docs, ask, hero, first_person, view=None):
         self.ctx, self.ask = ctx, ask
         self.log: list[str] = []
         self.docs = story_parts(docs, self.log)
@@ -508,11 +582,27 @@ class _Run:
         self.calls = collections.Counter()
         self.stats = collections.Counter()
         book_text = "\n".join(t for _o, _p, _l, ps in self.docs for _n, t in ps)
+        self.book = book_text
         self.book_sq = squash(book_text)
         # a one-word "name" the book also writes in lower case is a common
         # noun (a species, a job): "changeling", "grull"
         self.lower_words = set(re.findall(r"(?<![\w’'.!?:\"“] )\b([a-z][a-z'’\-]{2,})\b", book_text))
         self.parts = [(o, seg) for o, _p, _l, ps in self.docs for seg in _segments(ps, PASSAGE)]
+        # the earlier books: everyone the reader already knows starts from
+        # who they were when the last book ended, not from a vague first
+        # mention in this one
+        self.carried: set = set()
+        self.shown: set = set()
+        for name, (desc, aliases, _n) in (getattr(view, "people", None) or {}).items():
+            name = norm(name)
+            if not desc or not proper(name) or low(name) in PRONOUNS or name in self.known:
+                continue
+            self.known[name] = dict(
+                aliases=[norm(a) for a in aliases if proper(norm(a)) and norm(a) != name],
+                type="person", first=sentence(desc, CARRY_WORDS), change="", narrator=False)
+            self.carried.add(name)
+        if self.carried:
+            self.log.append("%d people from the books before" % len(self.carried))
 
     # -- the table --------------------------------------------------------
 
@@ -561,6 +651,14 @@ class _Run:
                 if any(same(n, low(x), common) for x in self.names(k))
                 and not (honor(name) and any(honor(x) and honor(x) != honor(name)
                                              for x in self.names(k)))]
+        if len(fits) == 1:
+            return fits[0]
+        if fits:
+            return None
+        # a nickname: "Bea" for Miss Beatrice, "Gwen" for Gwendolyn Duet
+        fits = [k for k in self.known
+                if any(variant(name, x) for x in self.names(k))
+                and not any(same_family(name, x) for x in self.names(k))]
         return fits[0] if len(fits) == 1 else None
 
     def forms(self, k):
@@ -643,9 +741,19 @@ class _Run:
         return None
 
     def common_noun(self, name):
+        """A word for a kind, not someone's name: written in lower case too
+        ("changeling"), or written as one of many - "a Kobold", "two more
+        Kobolds" - at least twice."""
         w = low(name).split()
-        return low(name) in GENERIC or (len(w) == 1 and len(name.split()) == 1
-                                        and w[0] in self.lower_words)
+        if low(name) in GENERIC or (len(w) == 1 and len(name.split()) == 1
+                                    and w[0] in self.lower_words):
+            return True
+        if len(name.split()) > 2:
+            return False
+        n = re.escape(name)
+        one = len(re.findall(r"\b(?:[Aa]n?|[Aa]nother|[Ee]very|[Ee]ach)\s+%s\b" % n, self.book))
+        many = len(re.findall(r"\b%s(?:e?s)\b" % n, self.book))
+        return one >= 1 and one + many >= 2
 
     def sweep(self, text, talk):
         """Person-like names in this part that are not in the table."""
@@ -722,6 +830,22 @@ class _Run:
         aliases = [norm(a) for a in p.get("aliases") or [] if norm(a) and norm(a) != name]
         if not name or not desc or name in self.notpeople:
             return
+        if name in NOT_NAMES or low(name) in PRONOUNS or not proper(name):
+            self.log.append("drop %s: not a name" % name)
+            return
+        if str(p.get("one", "yes")).strip().lower() in ("no", "false", "n"):
+            for n in [name] + aliases:
+                self.notpeople[n] = "not one individual"
+            self.log.append("not one individual %s (%s)" % (name, typ or "?"))
+            return
+        # an alias the model gives is kept only when it is a form of the
+        # name or the text itself ties the two together
+        kept = [a for a in aliases if proper(a) and low(a) not in PRONOUNS
+                and (variant(name, a) or linked(name, a, text))]
+        if len(kept) < len(aliases):
+            self.log.append("aliases not backed by the text for %s: %s"
+                            % (name, [a for a in aliases if a not in kept]))
+        aliases = kept
         if not in_text(name, ptext) and not any(in_text(a, ptext) for a in aliases):
             self.log.append("drop %s: name not in text" % name)
             return
@@ -939,8 +1063,20 @@ class _Run:
                if not self.find(h) and in_text(h, ptext)] + \
               [(n, "") for n in self.sweep(text, talk) if n not in self.hero]
         unl = unl[:UNLISTED_MAX]
+        # the people this part names, and everyone it asks about
+        listed = sorted(k for k in self.known
+                        if counts[k] > 0 or k in check or self.known[k]["narrator"])
         manifest = "\n".join("- " + self.entry(n)[:DESC + len(n)]
-                             for n in sorted(self.known)) or "(none yet)"
+                             for n in listed) or "(none yet)"
+        # someone from the earlier books gets their row where this book
+        # first names them
+        for k in listed:
+            if k in self.carried and k not in self.shown and counts[k] > 0:
+                f = self.forms(k)
+                pat = re.compile(r"\b(?:%s)\b" % "|".join(map(re.escape, f))) if f else None
+                para = next((n for n, t in seg if pat and pat.search(squash(t))), seg[0][0])
+                self.rows.append((order, para, k, self.who(k)))
+                self.shown.add(k)
         ctext = ("\nCHECK (say for each whether they CHANGED or stayed the SAME in this text):\n"
                  + "\n".join("- " + k for k in check) + "\n") if check else "\nCHECK: (none)\n"
         utext = ("\nUNLISTED names in this part: " + "; ".join(n + hint for n, hint in unl) +
@@ -1103,6 +1239,17 @@ class _Run:
         by_group = collections.defaultdict(list)
         for (g, _s), p in people.items():
             by_group[g].append(p)
+        # a fuller form of the same name ("Bianca" -> "Bianca Del Ciao") is
+        # no reveal: the person keeps the name the reader met them by
+        for g, ps in list(by_group.items()):
+            if len(ps) > 1 and all(variant(a.name, b.name) for a in ps for b in ps if a is not b):
+                ps.sort(key=lambda q: min((r[0], r[2]) for r in q.rows))
+                keep = ps[0]
+                for q in ps[1:]:
+                    keep.rows.extend(q.rows)
+                    keep.forms = sorted(set(keep.forms) | set(q.forms), key=len, reverse=True)
+                    people = {k: v for k, v in people.items() if v is not q}
+                by_group[g] = [keep]
         for ps in by_group.values():
             if len(ps) > 1:
                 for p in ps:
@@ -1113,6 +1260,11 @@ class _Run:
         for p in shown_people:
             p.mentions = C._mentions(self.docs, p.forms)
             p.spoke = C._first_spoken(self.docs, p.forms)
+        # a name the book never prints is not someone the reader meets
+        gone = [p.name for p in shown_people if not p.mentions and p.name != self.lead]
+        if gone:
+            self.log.append("never named in the text, left out: %s" % ", ".join(sorted(gone)))
+        shown_people = [p for p in shown_people if p.mentions or p.name == self.lead]
         rows = C._rows(shown_people, self.lead)
         report = ["%d people written; %d questions (%d parts, %d same-person checks); "
                   "%d changes kept, %d turned down; %d first descriptions changed"

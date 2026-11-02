@@ -224,3 +224,117 @@ def test_a_seed_makes_a_local_server_repeatable(monkeypatch):
     monkeypatch.setattr(p, "_post", lambda u, pl, h: seen.update(pl) or {"response": "ok"})
     p.complete("x")
     assert seen["options"]["seed"] == 7 and seen["options"]["top_k"] == 1
+
+
+# ---- the DCC 1-5 test run (Nov 2026): what went wrong, and why it cannot again
+
+class View:
+    def __init__(self, people):
+        self.people = people
+
+
+BOOK2 = [
+    (1, "front.xhtml", "Acknowledgments", [(0, "Thanks to Matt Dinniman and my Patreon backers.")]),
+    (2, "c1.xhtml", "Chapter 1", [
+        (0, "Mara Quill woke on the ferry. Tobin's old hat hung by the door."),
+        (1, "Wren Ashby poured the tea. “Sit,” Wren said. I watched the gulls."),
+        (2, "A Kobold ran past, then two more Kobolds, and the tree guy waved. Gwendolyn Duet waved from the dock."),
+    ]),
+    (3, "c2.xhtml", "Chapter 2", [
+        (0, "Gwen shouted again. Sierra, a vampire, landed beside Mara Quill. Wren Ashby frowned."),
+        (1, "Mara Quill sang like Taylor Swift. Gwen laughed."),
+    ]),
+]
+
+ANSWERS2 = {
+    "woke on the ferry": {"new": [
+        new("I", "person", "The narrator.", "I watched the gulls"),
+        new("Kobold", "monster", "A small monster running past.", "A Kobold ran past"),
+        new("tree guy", "person", "A man in a tree.", "the tree guy waved"),
+        new("Gwendolyn Duet", "person", "A sailor on the dock.", "Gwendolyn Duet waved"),
+    ], "updates": []},
+    "Gwen shouted again": {"new": [
+        new("Sierra", "monster", "A vampire who lands beside Mara.", "Sierra, a vampire, landed",
+            aliases=["Wren Ashby"]),
+        dict(new("Taylor Swift", "person", "A singer.", "sang like Taylor Swift"), one="no"),
+        new("Gwen", "person", "A loud sailor.", "Gwen shouted again"),
+    ], "updates": []},
+}
+
+
+class Model2(Model):
+    def __call__(self, prompt, system, usable):
+        self.prompts.append(prompt)
+        if prompt.startswith("Two entries"):
+            return "SAME" if "Gwen" in prompt.split("\nB: ", 1)[1] else "DIFFERENT ENTITIES"
+        text = prompt.split("NEW TEXT:", 1)[1]
+        for marker, got in ANSWERS2.items():
+            if marker in text:
+                return json.dumps(got)
+        return json.dumps({"new": [], "updates": []})
+
+
+def run2(view=True):
+    model = Model2()
+    people = {"Mara Quill": ("A young sailor, Tobin's apprentice.", [], 1),
+              "Wren Ashby": ("Mara's uncle, once known as the Grey Stranger.", ["Grey Stranger"], 1)}
+    rows, report, _s = X.build(Ctx(), BOOK2, model, hero="Mara Quill", first_person=True,
+                               view=View(people) if view else None)
+    return entries(rows), report, model
+
+
+def test_people_from_the_earlier_books_start_from_who_they_were():
+    rows, _r, _m = run2()
+    wren = [(o, e) for o, e in rows if e.startswith("Wren Ashby")]
+    assert wren[0] == (2, "Wren Ashby: Mara's uncle, once known as the Grey Stranger.")
+
+
+def test_the_earlier_books_are_only_named_where_this_book_names_them():
+    rows, _r, model = run2()
+    # Tobin's not in this book's list: the book only names his hat
+    assert not any(e.startswith("Tobin") for _o, e in rows)
+    # and the model is only shown the people a part names
+    assert "Grey Stranger" not in model.prompts[0] or "Wren" in model.prompts[0]
+
+
+def test_the_narrator_is_never_a_person_called_i():
+    rows, _r, _m = run2()
+    assert not any(e.startswith("I:") for _o, e in rows)
+
+
+def test_kinds_descriptions_and_outside_people_are_not_listed():
+    rows, _r, _m = run2()
+    names = {e.split(":")[0] for _o, e in rows}
+    assert not names & {"Kobold", "tree guy", "Taylor Swift"}
+
+
+def test_a_model_alias_the_text_does_not_back_joins_no_one():
+    rows, report, _m = run2()
+    wren = [e for _o, e in rows if e.startswith("Wren Ashby")]
+    assert all("vampire" not in e for e in wren)
+
+
+def test_a_nickname_joins_the_full_name():
+    rows, _r, _m = run2()
+    names = [e.split(":")[0] for _o, e in rows]
+    assert "Gwen" not in names and "Gwendolyn Duet" in names
+
+
+def test_the_authors_pages_are_skipped():
+    log = []
+    kept = X.story_parts(BOOK2, log)
+    assert [d[0] for d in kept] == [2, 3]
+    assert "before the story" in log[0]
+
+
+def test_name_forms():
+    assert X.variant("Bea", "Miss Beatrice")
+    assert X.variant("Gwen", "Gwendolyn Duet")
+    assert X.variant("Tina", "Big Tina")
+    assert X.variant("Bianca", "Bianca Del Ciao")
+    assert not X.variant("Fire Brandy", "Tizquick")
+    assert not X.variant("Miriam Dom", "Sierra")
+    assert not X.variant("Draven Holt", "Corvin Holt")
+    assert X.linked("Psamathe", "Samantha", "The goddess Psamathe, now called Samantha, smiled.")
+    assert X.linked("Riddle", "Lord Voldemort", "Riddle said, “I am Lord Voldemort.”")
+    assert not X.linked("Fire Brandy", "Tizquick", "Fire Brandy and Tizquick drove the train.")
