@@ -440,7 +440,10 @@ def variant(a: str, b: str) -> bool:
 
 
 def one_letter(a: str, b: str) -> bool:
-    """b is a with one letter added or left out, not a plural "s"."""
+    """b is a with one letter added or left out, not a plural "s"; or, in a
+    long name (7+ letters), one letter changed ("Theobold" / "Theobald")."""
+    if len(a) == len(b) >= 7:
+        return sum(x != y for x, y in zip(a, b, strict=True)) == 1
     if len(a) > len(b):
         a, b = b, a
     if len(b) != len(a) + 1 or b == a + "s":

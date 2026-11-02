@@ -342,6 +342,8 @@ def test_name_forms():
     assert X.variant("Lucia Marr", "Lucia Mar")
     assert X.variant("Vincente", "Vicente")
     assert not X.variant("Lena", "Lina")
+    assert X.variant("Theobold", "Theobald")
+    assert not X.variant("Marlon", "Marvin")
     assert not X.variant("Lucia Marr", "Lucio Mar")
 
 
