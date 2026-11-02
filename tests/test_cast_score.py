@@ -37,6 +37,8 @@ def test_each_check_finds_its_fault():
     assert any("Zev" in e for e in f["piled"])
     assert any("Ikicha" in e for e in f["empty"])
     assert not any(S.faults(NEW).values())
+    assert not S.faults([("1:1", "Ghazi", "A wizard of glass."),
+                         ("1:2", "Mrs. Ghazi", "An ooze who guards him.")])["twice"]
 
 
 def test_comparing_runs_flags_a_change_that_made_things_worse(tmp_path, capsys):

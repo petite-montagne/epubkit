@@ -665,6 +665,15 @@ class _Run:
             name = norm(name)
             if not desc or not proper(name) or low(name) in PRONOUNS or name in self.known:
                 continue
+            # two earlier books may have kept one person under two forms of a
+            # name ("Drakea" / "Crawler Drakea"): one entry, not two rows
+            twin = next((k for k in self.carried if self.retitled(k, name)), None)
+            if twin:
+                self.known[twin]["aliases"] = sorted(
+                    set(self.known[twin]["aliases"]) | {name} |
+                    {norm(a) for a in aliases if proper(norm(a))} - {twin})
+                self.log.append("from the books before: %s is %s" % (name, twin))
+                continue
             self.known[name] = dict(
                 aliases=[norm(a) for a in aliases if proper(norm(a)) and norm(a) != name],
                 type="person", first=carry_split(desc)[0], change=carry_split(desc)[1],
@@ -762,7 +771,8 @@ class _Run:
         different titles, or Mr./Mrs. with a family name alone ("Mr. Holt"),
         still go to the guard."""
         def family_only(n):
-            return bool(honor(n)) and surname_only(n)
+            # "Mr. Holt" is a family name; "Sir Ferdinand" is not
+            return honor(n) not in ("", "sir", "dame") and surname_only(n)
         b = bare(norm(name))
         if not b or family_only(norm(name)):
             return False
@@ -777,6 +787,9 @@ class _Run:
                 continue
             if not titled(name) or not titled(x) or plain(name) == plain(x):
                 return True
+        # one name spelt two ways ("Theobold" / "Theobald")
+        if any(misspelt(b.split(), bare(x).split()) for x in self.names(k)):
+            return True
         # a job the book also writes in lower case, used as a title:
         # "Ringmaster Grimaldi" / "Grimaldi" ("the ringmaster said")
         p = plain(norm(name)).split()

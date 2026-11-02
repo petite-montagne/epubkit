@@ -442,3 +442,21 @@ def test_dropping_a_claim_never_leaves_a_fragment():
     got = r.check_intro("Crixus", [], "A sniper who killed a guard and the mad mage's goal.",
                         "Shamus built", pt, text)
     assert got == "A sniper who is the mad mage's goal."
+
+
+def test_one_person_kept_twice_by_earlier_books_is_one_entry():
+    """Book 5 listed "Drakea" and "Crawler Drakea" in the same spot: earlier
+    books had kept both, and each became its own entry."""
+    import types
+    view = types.SimpleNamespace(people={
+        "Drakea": ("A crawler who wrote in the cookbook.", [], 2),
+        "Crawler Drakea": ("A crawler.", [], 1),
+        "Finian": ("An elf king.", [], 1),
+        "King Finian": ("The elf king.", [], 1),
+        "Theobold": ("A gnome.", [], 1),
+        "Theobald": ("A gnome.", [], 1)})
+    r = X._Run(Ctx(), DOCS, Model(), "", False, view)
+    assert {"Drakea", "Finian", "Theobold"} <= set(r.known)
+    assert not {"Crawler Drakea", "King Finian", "Theobald"} & set(r.known)
+    assert "Crawler Drakea" in r.known["Drakea"]["aliases"]
+    assert r.retitled("Finian", "Sir Finian")
