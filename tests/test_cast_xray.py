@@ -363,3 +363,18 @@ def test_the_series_memory_keeps_everyone_the_xray_list_kept(tmp_path, monkeypat
             report=lambda _t: None, note=lambda _t: None)
         R._remember_entries(ctx, memory, 1, "Carl", True, [], rows, {"leads": "them"})
         assert set(memory.data["people"]) == want
+
+
+def test_what_carries_to_the_next_book_is_who_they_are_not_a_passing_state():
+    # the level taken out of "Carl is now level three and..." left a broken
+    # sentence that rode along in every later row of book 2
+    assert X.carried("The narrator, a marine tech. Carl is now and has gained the skills "
+                     "Foot Soldier and Smush.") == "The narrator, a marine tech."
+    assert X.carried("A cat owned by Beatrice. Donut is now after participating in the "
+                     "fight.") == "A cat owned by Beatrice."
+    # what they became stays
+    assert X.carried("A rat-like creature who guards the guild door. A Bugaboo creature "
+                     "and guildmaster.") == ("A rat-like creature who guards the guild door. "
+                                             "A Bugaboo creature and guildmaster.")
+    assert X.carried("A goblin. He was drunk in the saferoom. Now Donut's manager.") == \
+        "A goblin. Now Donut's manager."

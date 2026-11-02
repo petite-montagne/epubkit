@@ -363,6 +363,32 @@ def words_cut(s: str, words: int) -> str:
     return " ".join(w[:words]).rstrip(",;:") + ("…" if len(w) > words else "")
 
 
+#: a state, not who someone is: levels, skills and stats change every
+#: chapter, and being drunk or asleep is over by the next book
+PASSING = re.compile(r"\b(level|levels|leveled|skills?|spells?|stats?|charisma|constitution|"
+                     r"strength|intelligence|dexterity|points|leaderboard|ranked|rank|"
+                     r"unconscious|passed out|drunk|asleep|injured|wounded|currently|"
+                     r"right now|tattoo|armor|wears|wearing|equipped|received|looted)\b", re.I)
+#: what is left of a sentence once its level was taken out ("Carl is now
+#: and has gained", "Donut is now after the fight")
+BROKEN = re.compile(r"\b(?:is|was|are|were) now (?:and|after|with|but|from|by)\b|"
+                    r"\b(?:is|was) now[,.]?$", re.I)
+
+
+def carried(desc: str) -> str:
+    """What the last book's line says that is still true: who they are
+    (its first sentence) and the last thing they became, never a passing
+    state or a sentence broken by the level being taken out of it."""
+    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+(?=[A-Z])", desc.strip()) if x.strip()]
+    if not parts:
+        return ""
+    keep = [parts[0]]
+    later = [x for x in parts[1:] if not PASSING.search(x) and not BROKEN.search(x)]
+    if later:
+        keep.append(later[-1])
+    return words_cut(" ".join(keep), CARRY_WORDS)
+
+
 def kin_of(desc: str, other_forms) -> bool:
     """The description calls one of these names family: "Draco's father",
     "father of Draco", "Harry's aunt"."""
@@ -609,7 +635,7 @@ class _Run:
                 continue
             self.known[name] = dict(
                 aliases=[norm(a) for a in aliases if proper(norm(a)) and norm(a) != name],
-                type="person", first=words_cut(desc, CARRY_WORDS), change="", narrator=False)
+                type="person", first=carried(desc), change="", narrator=False)
             self.carried.add(name)
         if self.carried:
             self.log.append("%d people from the books before" % len(self.carried))
