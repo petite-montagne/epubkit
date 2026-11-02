@@ -355,6 +355,14 @@ def test_a_title_added_or_dropped_is_the_same_person():
     assert not r.retitled("Draven Holt", "Mr. Holt")
     assert not r.retitled("Mr. Kell", "Mrs. Kell")
     assert not r.retitled("Donut", "Mongo")
+    r.known["Mexx-6000"] = dict(aliases=[], type="person", first="A robot.", change="",
+                                narrator=False)
+    r.known["Glass Wizard"] = dict(aliases=[], type="person", first="A wizard.", change="",
+                                   narrator=False)
+    assert r.retitled("Mexx-6000", "Mexx")
+    assert r.named_as("The Glass Wizard who sent a letter.", "Ghazi") == "Glass Wizard"
+    assert r.named_as("A man who met the Glass Wizard.", "Ghazi") is None
+    assert X.carry_split("rock monster bodyguard. Now a guard.")[0] == "Rock monster bodyguard."
     assert X.linked("Psamathe", "Samantha", "The goddess Psamathe, now called Samantha, smiled.")
     assert X.linked("Riddle", "Lord Voldemort", "Riddle said, “I am Lord Voldemort.”")
     assert not X.linked("Fire Brandy", "Tizquick", "Fire Brandy and Tizquick drove the train.")
@@ -410,3 +418,20 @@ def test_a_newer_change_replaces_what_a_carried_person_became():
     r.known["Zev"]["change"] = "On a retreat."
     assert r.who("Zev") == "A woman who runs the show. On a retreat."
     assert X.carry_split("A goblin. He was drunk in the saferoom.") == ("A goblin.", "")
+
+
+def test_dropping_a_claim_never_leaves_a_fragment():
+    """Book 4 had "Created Ruckus." and "Who held a Master's Degree..." once an
+    unbacked death was cut from the head of the line."""
+    r = X._Run(Ctx(), DOCS, Model(), "", False)
+    text = "Shamus built the great bird Ruckus. Jennifer held a degree in library science."
+    pt = X.squash(text)
+    got = r.check_intro("Jennifer", [], "A librarian killed in the flood, who held a degree "
+                        "in library science.", "Jennifer held a degree", pt, text)
+    assert got == "A librarian, who held a degree in library science."
+    got = r.check_intro("Shamus", [], "Killed long ago and created Ruckus.",
+                        "Shamus built the great bird Ruckus", pt, text)
+    assert got == "Someone who created Ruckus."
+    got = r.check_intro("Crixus", [], "A sniper who killed a guard and the mad mage's goal.",
+                        "Shamus built", pt, text)
+    assert got == "A sniper who is the mad mage's goal."

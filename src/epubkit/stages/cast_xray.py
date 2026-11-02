@@ -389,6 +389,7 @@ def carry_split(desc: str) -> tuple:
     if not parts:
         return "", ""
     later = [x for x in parts[1:] if not PASSING.search(x) and not BROKEN.search(x)]
+    parts = [x[:1].upper() + x[1:] for x in parts]       # "rock monster..." once a level went
     first = words_cut(parts[0], CARRY_WORDS)
     room = CARRY_WORDS - len(first.split())
     change = words_cut(later[-1], room) if later and room >= 4 else ""
@@ -753,7 +754,8 @@ class _Run:
 
     def retitled(self, k, name):
         """The same name with a title only one side carries ("Princess Donut" /
-        "Donut", "King Henrik" / "Henrik"): one person, no need to ask. Two
+        "Donut", "King Henrik" / "Henrik", "Mexx-6000" / "Mexx"): one person,
+        no need to ask. Two
         different titles, or Mr./Mrs. with a family name alone ("Mr. Holt"),
         still go to the guard."""
         def family_only(n):
@@ -761,8 +763,12 @@ class _Run:
         b = bare(norm(name))
         if not b or family_only(norm(name)):
             return False
+        def num(n):
+            return re.sub(r"\s+\d+$", "", n)
         for x in self.names(k):
-            if bare(x) != b or family_only(x):
+            bx = bare(x)
+            # a model number only one side carries: "Mexx-6000" / "Mexx"
+            if (bx != b and num(bx) != b and num(b) != bx) or family_only(x):
                 continue
             if honor(name) and honor(x) and honor(name) != honor(x):
                 continue
@@ -805,6 +811,18 @@ class _Run:
                     if not VERBISH & set(e.split()) and len(e.split()) <= 5 \
                             and self.book_sq.count(e) >= 2:
                         self.epithets[k].add(e)
+
+    def named_as(self, desc, name):
+        """Someone known the description opens by naming: Glass Wizard given
+        "Ghazi, the author of the letter", Ghazi given "The Glass Wizard who
+        sent a letter". Only a candidate: the guard still decides."""
+        for k in self.known:
+            for x in self.names(k):
+                if plain(x) == plain(name) or len(x) < 4 or low(x) in PRONOUNS:
+                    continue
+                if re.match(r"(?:the\s+)?%s(?:,|\s+(?:who|is|was)\b)" % re.escape(x), desc, re.I):
+                    return k
+        return None
 
     def aka(self, ev, name):
         """Someone the quote itself says this name belongs to."""
@@ -966,7 +984,7 @@ class _Run:
             return
         para = next((n for n, t in seg if in_text(name, squash(t))), seg[0][0])
         hit = self.find(name) or next((self.find(a) for a in aliases if self.find(a)), None) \
-            or self.aka(ev, name)
+            or self.aka(ev, name) or self.named_as(desc, name)
         if hit and plain(name) in {plain(x) for x in self.names(hit)}:
             self.known[hit]["aliases"] = sorted(
                 set(self.known[hit]["aliases"]) |
@@ -1065,10 +1083,30 @@ class _Run:
                 changed.append("softened %s (%s)" % (cl.strip(" ."), "/".join(bad)))
             else:
                 changed.append("dropped %s (%s)" % (cl.strip(" ."), "/".join(bad)))
+                if idx == 0:
+                    # the head says who they are: keep what comes before the
+                    # claim ("A librarian killed in the flood" -> "A
+                    # librarian"), so the rest is not left without a subject
+                    # ("Who held a Master's Degree...", "Created Ruckus.")
+                    say = "|".join(CLAIMS[b][0] for b in bad)
+                    m = re.search(r"\b(?:%s)\b" % say, cl, re.I)
+                    head = cl[:m.start()] if m else ""
+                    head = re.sub(r"\s+(?:who|which|that|was|is|were|are|and|by|"
+                                  r"recently|later|now)?\s*$", "", head, flags=re.I).strip(" ,;")
+                    if len(head.split()) < 2 or not re.search(r"[A-Za-z]{3}", head):
+                        head = "Someone"
+                    out.append(("", head))
+                    if idx + 1 < len(pieces) and pieces[idx + 1][0].strip() in ("and", "but"):
+                        pieces[idx + 1] = (" who ", pieces[idx + 1][1])
                 # "goose who killed X and attacks" -> "goose who attacks"
-                if sep.strip() in ("who", "which", "that") and idx + 1 < len(pieces) \
+                elif sep.strip() in ("who", "which", "that") and idx + 1 < len(pieces) \
                         and pieces[idx + 1][0].strip() in ("and", "but"):
-                    pieces[idx + 1] = (sep, pieces[idx + 1][1])
+                    nxt = pieces[idx + 1][1]
+                    # "who killed a guard and the mad mage's goal" -> "who is
+                    # the mad mage's goal"
+                    if re.match(r"(?:the|a|an|his|her|their|its|[A-Z]\w*'s)\b", nxt):
+                        nxt = "is " + nxt
+                    pieces[idx + 1] = (sep, nxt)
         if not changed:
             return desc
         self.stats["first descriptions changed"] += 1
