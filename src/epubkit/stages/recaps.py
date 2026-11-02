@@ -1085,8 +1085,12 @@ def _remember_entries(ctx, memory, index, hero, first_person, parts, people, wor
     for _o, _p, _para, who, status, n, text in people:
         if text:
             last[who] = (int(n), status, text)
-    keep = sorted((w for w, (n, st, _t) in last.items() if n >= 2 or st == "met"),
-                  key=lambda w: -last[w][0])[:80]
+    # the xray who's who already left out everyone who is not a character,
+    # and someone named once in book 1 can be back in book 3 (Hekla, Elle):
+    # it keeps everyone, so they come back under the same name
+    xray = getattr(getattr(ctx.config, "recaps", None), "cast_method", "") == "xray"
+    keep = sorted((w for w, (n, st, _t) in last.items() if xray or n >= 2 or st == "met"),
+                  key=lambda w: -last[w][0])[:300 if xray else 80]
     final = {}
     for who in keep:
         desc = _lasting(last[who][2], [last[who][2]])

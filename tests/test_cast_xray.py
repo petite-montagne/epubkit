@@ -277,7 +277,8 @@ class Model2(Model):
 def run2(view=True):
     model = Model2()
     people = {"Mara Quill": ("A young sailor, Tobin's apprentice.", [], 1),
-              "Wren Ashby": ("Mara's uncle, once known as the Grey Stranger.", ["Grey Stranger"], 1)}
+              "Wren Ashby": ("Mara's uncle, once known as the Grey Stranger. Now the harbour master.",
+                             ["Grey Stranger"], 1)}
     rows, report, _s = X.build(Ctx(), BOOK2, model, hero="Mara Quill", first_person=True,
                                view=View(people) if view else None)
     return entries(rows), report, model
@@ -286,7 +287,9 @@ def run2(view=True):
 def test_people_from_the_earlier_books_start_from_who_they_were():
     rows, _r, _m = run2()
     wren = [(o, e) for o, e in rows if e.startswith("Wren Ashby")]
-    assert wren[0] == (2, "Wren Ashby: Mara's uncle, once known as the Grey Stranger.")
+    # the whole line, what they became too
+    assert wren[0] == (2, "Wren Ashby: Mara's uncle, once known as the Grey Stranger. "
+                          "Now the harbour master.")
 
 
 def test_the_earlier_books_are_only_named_where_this_book_names_them():
@@ -338,3 +341,25 @@ def test_name_forms():
     assert X.linked("Psamathe", "Samantha", "The goddess Psamathe, now called Samantha, smiled.")
     assert X.linked("Riddle", "Lord Voldemort", "Riddle said, “I am Lord Voldemort.”")
     assert not X.linked("Fire Brandy", "Tizquick", "Fire Brandy and Tizquick drove the train.")
+
+
+def test_the_series_memory_keeps_everyone_the_xray_list_kept(tmp_path, monkeypatch):
+    """Hekla is named once in book 1 and back in book 3: she must come back
+    under the same name, not as "Hekla of Brynhild's Daughters"."""
+    import types
+
+    from epubkit import series_memory as S
+    from epubkit.stages import recaps as R
+
+    monkeypatch.setattr(R, "_story", lambda *a, **k: "")
+    memory = S.Memory.open(tmp_path, "Test")
+    rows = [(1, "c1", 0, "Carl", "met", 9, "The narrator."),
+            (1, "c1", 5, "Hekla", "heard", 1, "A Valkyrie and leader of Brynhild's Daughters.")]
+    for method, want in (("book", {"Carl"}), ("xray", {"Carl", "Hekla"})):
+        memory.data["people"] = {}
+        ctx = types.SimpleNamespace(
+            config=types.SimpleNamespace(recaps=types.SimpleNamespace(cast_method=method)),
+            path=tmp_path / "book1.epub", provider=None,
+            report=lambda _t: None, note=lambda _t: None)
+        R._remember_entries(ctx, memory, 1, "Carl", True, [], rows, {"leads": "them"})
+        assert set(memory.data["people"]) == want

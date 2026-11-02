@@ -353,6 +353,16 @@ def sentence(s: str, words: int) -> str:
     return " ".join(out[:words]).rstrip(",;:") + ("…" if len(out) > words else "")
 
 
+def words_cut(s: str, words: int) -> str:
+    """The whole line up to a word budget: what an earlier book said about
+    someone is often two sentences (who they are, then what they became),
+    and the second is the one that matters (Mordecai was "a rat-like
+    creature who guards the Tutorial Guild door" in book 5 when only the
+    first was kept)."""
+    w = s.split()
+    return " ".join(w[:words]).rstrip(",;:") + ("…" if len(w) > words else "")
+
+
 def kin_of(desc: str, other_forms) -> bool:
     """The description calls one of these names family: "Draco's father",
     "father of Draco", "Harry's aunt"."""
@@ -599,7 +609,7 @@ class _Run:
                 continue
             self.known[name] = dict(
                 aliases=[norm(a) for a in aliases if proper(norm(a)) and norm(a) != name],
-                type="person", first=sentence(desc, CARRY_WORDS), change="", narrator=False)
+                type="person", first=words_cut(desc, CARRY_WORDS), change="", narrator=False)
             self.carried.add(name)
         if self.carried:
             self.log.append("%d people from the books before" % len(self.carried))
