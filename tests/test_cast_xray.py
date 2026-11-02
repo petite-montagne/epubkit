@@ -395,3 +395,18 @@ def test_what_carries_to_the_next_book_is_who_they_are_not_a_passing_state():
                                              "A Bugaboo creature and guildmaster.")
     assert X.carried("A goblin. He was drunk in the saferoom. Now Donut's manager.") == \
         "A goblin. Now Donut's manager."
+
+
+def test_a_newer_change_replaces_what_a_carried_person_became():
+    """Book 3 rows read "who + book 1's change + book 3's change": the carried
+    change must be the one a newer change replaces, not part of who they are."""
+    import types
+    view = types.SimpleNamespace(people={
+        "Zev": ("A woman who runs the show. Zev is suspended for cheating.", [], 2)})
+    r = X._Run(Ctx(), DOCS, Model(), "", False, view)
+    assert r.known["Zev"]["first"] == "A woman who runs the show."
+    assert r.known["Zev"]["change"] == "Zev is suspended for cheating."
+    assert r.who("Zev") == "A woman who runs the show. Zev is suspended for cheating."
+    r.known["Zev"]["change"] = "On a retreat."
+    assert r.who("Zev") == "A woman who runs the show. On a retreat."
+    assert X.carry_split("A goblin. He was drunk in the saferoom.") == ("A goblin.", "")

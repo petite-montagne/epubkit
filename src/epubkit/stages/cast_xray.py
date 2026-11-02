@@ -379,14 +379,20 @@ def carried(desc: str) -> str:
     """What the last book's line says that is still true: who they are
     (its first sentence) and the last thing they became, never a passing
     state or a sentence broken by the level being taken out of it."""
+    return words_cut(" ".join(x for x in carry_split(desc) if x), CARRY_WORDS)
+
+
+def carry_split(desc: str) -> tuple:
+    """carried() as (who they are, what they became), so that a newer change
+    in this book replaces what they became instead of piling on top."""
     parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+(?=[A-Z])", desc.strip()) if x.strip()]
     if not parts:
-        return ""
-    keep = [parts[0]]
+        return "", ""
     later = [x for x in parts[1:] if not PASSING.search(x) and not BROKEN.search(x)]
-    if later:
-        keep.append(later[-1])
-    return words_cut(" ".join(keep), CARRY_WORDS)
+    first = words_cut(parts[0], CARRY_WORDS)
+    room = CARRY_WORDS - len(first.split())
+    change = words_cut(later[-1], room) if later and room >= 4 else ""
+    return first, change
 
 
 def kin_of(desc: str, other_forms) -> bool:
@@ -657,7 +663,8 @@ class _Run:
                 continue
             self.known[name] = dict(
                 aliases=[norm(a) for a in aliases if proper(norm(a)) and norm(a) != name],
-                type="person", first=carried(desc), change="", narrator=False)
+                type="person", first=carry_split(desc)[0], change=carry_split(desc)[1],
+                narrator=False)
             self.carried.add(name)
         if self.carried:
             self.log.append("%d people from the books before" % len(self.carried))
