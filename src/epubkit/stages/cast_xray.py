@@ -474,6 +474,15 @@ def misspelt(wa: list, wb: list) -> bool:
 LINK = r"(?:(?:also|now|later|then|usually|often|sometimes|simply) )?(?:called|known as|named|nicknamed|aka|or|alias|whose (?:real |true )?name (?:is|was))"
 
 
+
+def twice(a: str, b: str) -> bool:
+    """Two shown names that are one name: the same bare name, or spelt one
+    letter apart. Mr./Mrs. with a family name is someone else (Mrs. Ghazi /
+    Ghazi). The report's "shown twice" and the scorecard both use this."""
+    if any(honor(n) and surname_only(n) for n in (a, b)):
+        return False
+    return bare(a) == bare(b) or misspelt(bare(a).split(), bare(b).split())
+
 def linked(a: str, b: str, text: str) -> bool:
     """The text itself says a and b are one: "X, also known as Y", "X (Y)",
     "Y's real name was X", "I am X" said where Y speaks."""
@@ -1540,7 +1549,7 @@ class _Run:
         self.self_check(shown_people)
         # what the scorecard calls "twice": say where each one came from
         for a, b in itertools.combinations(shown_people, 2):
-            if bare(a.name) == bare(b.name) or variant(a.name, b.name):
+            if twice(a.name, b.name):
                 ga = next((g for (g, _s), v in people.items() if v is a), "?")
                 gb = next((g for (g, _s), v in people.items() if v is b), "?")
                 self.log.append("shown twice: %s [entry %s: %s] | %s [entry %s: %s]%s"

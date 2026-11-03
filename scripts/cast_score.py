@@ -86,10 +86,7 @@ def faults(rows):
             out["long"].append(tag)
     names = sorted(seen)
     for a, b in itertools.combinations(names, 2):
-        # Mr./Mrs. with a family name is someone else (Mrs. Ghazi / Ghazi)
-        if any(X.honor(n) and X.surname_only(n) for n in (a, b)):
-            continue
-        if X.bare(a) == X.bare(b) or X.misspelt(X.bare(a).split(), X.bare(b).split()):
+        if X.twice(a, b):
             out["twice"].append("%s / %s" % (a, b))
     return out
 

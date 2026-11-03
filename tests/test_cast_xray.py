@@ -516,3 +516,9 @@ def test_the_self_check_mends_or_leaves_out_every_bad_line():
     assert all("Vrah" not in row[4] for row in lang.rows)
     assert bomo.rows[0][4] == "Rock monster bodyguard. Now guards Carl."
     assert [row[4] for row in ika.rows] == ["A crawler who writes notes in the cookbook."]
+
+
+def test_twice_is_one_name_shown_twice_not_a_relative():
+    from epubkit.stages.cast_xray import twice
+    assert twice("Lucia Marr", "Lucia Mar") and twice("Princess Donut", "Donut")
+    assert not twice("Mrs. Ghazi", "Ghazi") and not twice("Carl", "Donut")
