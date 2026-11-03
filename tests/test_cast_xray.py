@@ -460,3 +460,15 @@ def test_one_person_kept_twice_by_earlier_books_is_one_entry():
     assert not {"Crawler Drakea", "King Finian", "Theobald"} & set(r.known)
     assert "Crawler Drakea" in r.known["Drakea"]["aliases"]
     assert r.retitled("Finian", "Sir Finian")
+
+
+def test_two_entries_for_one_name_are_joined_at_the_end():
+    r = X._Run(Ctx(), DOCS, Model(), "", False)
+    for k in ("Crawler Drakea", "Drakea", "Draven Holt", "Corvin Holt"):
+        r.known[k] = dict(aliases=[], type="person", first="Someone.", change="",
+                          narrator=False)
+    r.finish()
+    assert ("Drakea" in r.known) != ("Crawler Drakea" in r.known)
+    assert {"Draven Holt", "Corvin Holt"} <= set(r.known)
+    assert not X.variant("Manasa", "Mana Genita")
+    assert X.variant("Bea", "Miss Beatrice")

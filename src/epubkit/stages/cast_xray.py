@@ -434,8 +434,9 @@ def variant(a: str, b: str) -> bool:
     if len(s) < len(lg) and set(s) <= set(lg) and len("".join(s)) >= 2 \
             and not all(w in STOPW for w in s):
         return True
-    if len(s) == 1 and min(len(s[0]), len(lg[0])) >= 3 and s[0] != lg[0] \
-            and (lg[0].startswith(s[0]) or s[0].startswith(lg[0])):
+    # a nickname is the start of the longer name, never longer than it
+    # ("Manasa" is not "Mana Genita")
+    if len(s) == 1 and len(s[0]) >= 3 and len(s[0]) < len(lg[0]) and lg[0].startswith(s[0]):
         return True
     return misspelt(wa, wb)
 
@@ -1290,6 +1291,21 @@ class _Run:
                 self.never.add(fp)
 
     def finish(self):
+        # one person still held as two entries, by whatever path each came in
+        # (a carried "Crawler Drakea" and a new "Drakea"): the same name with
+        # a title added or dropped, or spelt one letter apart, is one person
+        changed = True
+        while changed:
+            changed = False
+            for a, b in itertools.combinations(sorted(self.known), 2):
+                if frozenset((a, b)) in self.never or \
+                        self.family(self.names(a), self.who(a), self.names(b), self.who(b)):
+                    continue
+                if any(self.retitled(a, x) for x in self.names(b)):
+                    keep = self._join(a, b)
+                    self.log.append("joined at the end (same name): %s + %s -> %s" % (a, b, keep))
+                    changed = True
+                    break
         known = self.known
 
         def cur(n):
