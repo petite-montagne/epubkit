@@ -532,8 +532,9 @@ def test_a_listed_person_or_the_lead_is_never_turned_into_not_a_person(monkeypat
     answers["Gwen shouted again"]["new"] += [
         dict(new("Mara Quill", "group", "Sailors like her.", "landed beside Mara Quill"), one="no"),
         new("Wren Ashby", "place", "The harbour.", "Wren Ashby frowned"),
+        dict(new("Captain Mara Quill", "title", "Her title.", "landed beside Mara Quill"), one="no"),
     ]
     monkeypatch.setattr(sys.modules[__name__], "ANSWERS2", answers)
     _rows, report, _m = run2()
     bad = [r for r in report if r.startswith("not people:")]
-    assert not any("Mara Quill" in r or "Wren Ashby" in r for r in bad), bad
+    assert not any("Mara Quill" in r or "Wren Ashby" in r for r in bad), bad   # titled too

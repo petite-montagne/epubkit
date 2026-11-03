@@ -989,8 +989,14 @@ class _Run:
 
     def is_known(self, n) -> bool:
         """Listed already, or the book's main character."""
-        return bool(n) and (plain(n) == plain(self.lead or "") or
-                            any(plain(n) in {plain(x) for x in self.names(k)} for k in self.known))
+        if not n:
+            return False
+        # with or without a title: "Crawler Carl" is the lead "Carl"
+        forms = {plain(n), plain(bare(n))}
+        names = {plain(self.lead or ""), plain(bare(self.lead or ""))} - {""}
+        for k in self.known:
+            names |= {plain(x) for x in self.names(k)} | {plain(bare(x)) for x in self.names(k)}
+        return bool(forms & names)
 
     def add(self, p, order, seg, text, ptext):
         if not isinstance(p, dict):
