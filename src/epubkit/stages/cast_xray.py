@@ -1394,15 +1394,24 @@ class _Run:
             by_group[g].append(p)
         # a fuller form of the same name ("Bianca" -> "Bianca Del Ciao") is
         # no reveal: the person keeps the name the reader met them by
+        # Each pair that are forms of one name merge, even when the person
+        # also has a name that is not ("Drakea" / "Crawler Drakea" stayed
+        # two rows at one spot because a third, revealed name was there too)
         for g, ps in list(by_group.items()):
-            if len(ps) > 1 and all(variant(a.name, b.name) for a in ps for b in ps if a is not b):
-                ps.sort(key=lambda q: min((r[0], r[2]) for r in q.rows))
-                keep = ps[0]
-                for q in ps[1:]:
-                    keep.rows.extend(q.rows)
-                    keep.forms = sorted(set(keep.forms) | set(q.forms), key=len, reverse=True)
-                    people = {k: v for k, v in people.items() if v is not q}
-                by_group[g] = [keep]
+            if len(ps) < 2:
+                continue
+            ps.sort(key=lambda q: min((r[0], r[2]) for r in q.rows))
+            kept: list = []
+            for q in ps:
+                into = next((k for k in kept if variant(k.name, q.name)), None)
+                if into is None:
+                    kept.append(q)
+                    continue
+                into.rows.extend(q.rows)
+                into.rows.sort(key=lambda r: (r[0], r[2]))
+                into.forms = sorted(set(into.forms) | set(q.forms), key=len, reverse=True)
+                people = {k: v for k, v in people.items() if v is not q}
+            by_group[g] = kept
         for ps in by_group.values():
             if len(ps) > 1:
                 for p in ps:
