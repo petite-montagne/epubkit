@@ -215,6 +215,11 @@ B: {b}
 Are A and B the same individual? A parent and child, brothers and sisters, a husband and wife or any two relatives who share a family name are DIFFERENT. If they are different people, the first line of your answer must be exactly DIFFERENT ENTITIES. If they are the same person, the first line must be exactly SAME."""
 
 
+GUARD_LISTED = """
+
+The series' character list gives both names to one person. Answer SAME unless the entries show they are two different people."""
+
+
 # ----------------------------------------------------------- name helpers
 
 def low(s: str) -> str:
@@ -626,12 +631,15 @@ def build(ctx, docs, ask, *, hero: str = "", first_person: bool = False,
         return C.build(ctx, docs, ask, hero=hero, first_person=first_person, lang=lang,
                        view=view, title=title, workers=workers, names_list=names_list,
                        facts=facts, probe=probe)
-    return _Run(ctx, docs, ask, hero, first_person, view).go()
+    return _Run(ctx, docs, ask, hero, first_person, view, names_list).go()
 
 
 class _Run:
-    def __init__(self, ctx, docs, ask, hero, first_person, view=None):
+    def __init__(self, ctx, docs, ask, hero, first_person, view=None, names_list=None):
         self.ctx, self.ask = ctx, ask
+        # the series' names list (tools/wiki_names.py): only which names are
+        # one person and which are not, never what anyone is like
+        self.names_list = names_list if names_list else None
         self.log: list[str] = []
         self.docs = story_parts(docs, self.log)
         self.path_of = {o: p for o, p, _l, _ps in self.docs}
@@ -773,6 +781,16 @@ class _Run:
                    for x in a_names for y in b_names) or \
             kin_of(a_desc, b_names) or kin_of(b_desc, a_names)
 
+    def listed(self, a_names, b_names):
+        """What the names list says: True one person, False two, None silent."""
+        if not self.names_list:
+            return None
+        oa = {self.names_list.of(x) for x in a_names} - {""}
+        ob = {self.names_list.of(x) for x in b_names} - {""}
+        if not oa or not ob:
+            return None
+        return bool(oa & ob)
+
     def retitled(self, k, name):
         """The same name with a title only one side carries ("Princess Donut" /
         "Donut", "King Henrik" / "Henrik", "Mexx-6000" / "Mexx"): one person,
@@ -829,7 +847,8 @@ class _Run:
             return False
         self.calls["guard"] += 1
         try:
-            r = self.ask(GUARD.format(a=self.entry(a), b=b_name + ": " + b_who), SYSTEM,
+            hint = GUARD_LISTED if self.listed(self.names(a), [b_name]) else ""
+            r = self.ask(GUARD.format(a=self.entry(a), b=b_name + ": " + b_who) + hint, SYSTEM,
                          _usable_guard).strip()
         except Exception:                                    # noqa: BLE001
             r = ""
@@ -1031,6 +1050,15 @@ class _Run:
             self.log.append("family %s | %s: kept apart" % (hit, name))
             self.never.add(frozenset((hit, name)))
             hit = None
+        if hit and self.listed(self.names(hit), [name, *aliases]) is False:
+            self.log.append("names list: %s and %s are two people" % (hit, name))
+            self.never.add(frozenset((hit, name)))
+            hit = None
+        if hit and self.listed(self.names(hit), [name, *aliases]) and \
+                any(variant(x, name) or linked(x, name, text) for x in self.names(hit)):
+            main_name = self._grow(hit, name, aliases)
+            self.log.append("joined %s + %s -> %s (names list)" % (hit, name, main_name))
+            return
         if hit and self.retitled(hit, name):
             main_name = self._grow(hit, name, aliases)
             self.log.append("joined %s + %s -> %s (same name, title added or dropped)"
@@ -1306,6 +1334,59 @@ class _Run:
             else:
                 self.never.add(fp)
 
+    def self_check(self, shown_people):
+        """The last look at every line before it is written, with no model
+        and no answer key: what used to take a person hours of reading rows.
+        A line is mended when it can be (a capital to start, at most two
+        sentences, no gap where a level was) and left out when it can't (it
+        says nothing, or it is word for word someone else's line)."""
+        fixed = collections.Counter()
+        owner: dict = {}
+        # in reading order, so a line belongs to whoever had it first
+        events = sorted(((r[0], r[2], n, i) for n, p in enumerate(shown_people)
+                         for i, r in enumerate(p.rows)), key=lambda e: (e[0], e[1], e[2], e[3]))
+        kept = collections.defaultdict(list)
+        for _o, _pn, n, i in events:
+            p = shown_people[n]
+            o, path, pn, status, text = p.rows[i]
+            t = text.strip()
+            parts = [x for x in re.split(r"(?<=[.!?])\s+(?=[A-Z])", t) if x]
+            parts = [x for x in parts if not BROKEN.search(x)] or parts[:1]
+            if len(parts) > 2:
+                parts = [parts[0], parts[-1]]
+                fixed["cut to two sentences"] += 1
+            last = parts[-1] if len(parts) > 1 else ""
+            if last and owner.get(squash(last), p) is not p and len(squash(last).split()) >= 6:
+                # someone else's change tacked on: keep who this one is
+                parts = parts[:-1]
+                fixed["left out: someone else's change"] += 1
+            t = " ".join(parts)
+            if re.match(r"(?:who|which|that|whose)\b", t, re.I):
+                t = "Someone " + t[0].lower() + t[1:]
+                fixed["given a subject"] += 1
+            if t[:1].islower():
+                t = t[:1].upper() + t[1:]
+                fixed["capital added"] += 1
+            if len(t) > 220:
+                t = words_cut(t, 36)
+                fixed["shortened"] += 1
+            sq = squash(t)
+            if owner.get(sq, p) is not p and len(sq.split()) >= 6:
+                fixed["left out: someone else's line"] += 1
+                continue
+            if re.fullmatch(r"(?:An?|The) [\w'-]+(?: [\w'-]+)?\.?", t) and len(p.rows) > 1:
+                fixed["left out: says nothing"] += 1
+                continue
+            owner.setdefault(sq, p)
+            for x in parts[1:]:
+                owner.setdefault(squash(x), p)
+            kept[n].append((o, path, pn, status, t))
+        for n, p in enumerate(shown_people):
+            p.rows[:] = kept.get(n) or p.rows[:1]
+        if fixed:
+            self.log.append("self-check: " + ", ".join(
+                "%s %d" % kv for kv in sorted(fixed.items())))
+
     def finish(self):
         # one person still held as two entries, by whatever path each came in
         # (a carried "Crawler Drakea" and a new "Drakea"): the same name with
@@ -1317,7 +1398,11 @@ class _Run:
                 if frozenset((a, b)) in self.never or \
                         self.family(self.names(a), self.who(a), self.names(b), self.who(b)):
                     continue
-                if any(self.retitled(a, x) for x in self.names(b)):
+                said = self.listed(self.names(a), self.names(b))
+                if said is False:
+                    continue
+                if any(self.retitled(a, x) for x in self.names(b)) or (said and any(
+                        variant(x, y) for x in self.names(a) for y in self.names(b))):
                     keep = self._join(a, b)
                     self.log.append("joined at the end (same name): %s + %s -> %s" % (a, b, keep))
                     changed = True
@@ -1452,6 +1537,7 @@ class _Run:
                     p.forms = sorted({f for f in p.forms if f not in others} | {p.name},
                                      key=len, reverse=True)
         shown_people = list(people.values())
+        self.self_check(shown_people)
         # what the scorecard calls "twice": say where each one came from
         for a, b in itertools.combinations(shown_people, 2):
             if bare(a.name) == bare(b.name) or variant(a.name, b.name):

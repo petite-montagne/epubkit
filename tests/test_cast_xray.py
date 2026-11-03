@@ -479,3 +479,40 @@ def test_a_job_word_is_not_a_given_name():
     r.book += " The ringmaster bowed."
     assert not r.family(["Ringmaster Grimaldi"], "", ["Papa Grimaldi"], "")
     assert r.family(["Draven Holt"], "", ["Corvin Holt"], "")
+
+
+def test_the_names_list_joins_a_nickname_and_keeps_two_people_apart():
+    from epubkit import series_memory as S
+    names = S.Names([("Beatrice", ["Bea", "Miss Beatrice"], "person"),
+                     ("Mr. Holt", [], "person"), ("Holt", [], "person")])
+    r = X._Run(Ctx(), DOCS, Model(), "", False, None, names)
+    for k in ("Bea", "Miss Beatrice", "Holt", "Mr. Holt"):
+        r.known[k] = dict(aliases=[], type="person", first="Someone.", change="",
+                          narrator=False)
+    r.finish()
+    assert ("Bea" in r.known) != ("Miss Beatrice" in r.known)
+    assert r.listed(["Holt"], ["Mr. Holt"]) is False
+    assert r.listed(["Bea"], ["Zed"]) is None
+
+
+def test_the_self_check_mends_or_leaves_out_every_bad_line():
+    C = X.C
+    r = X._Run(Ctx(), DOCS, Model(), "", False)
+    bog = C.Person("Bogdon Ro", {"Bogdon Ro"}, True)
+    bog.rows = [(5, "", 90, "heard", "A legatus ranked ninth. Reanimated corpse head biting "
+                 "Vrah's neck.")]
+    lang = C.Person("Langley", {"Langley"}, True)
+    lang.rows = [(5, "", 10, "heard", "A leader of a larger group."),
+                 (5, "", 102, "heard", "A leader of a larger group. Reanimated corpse head "
+                  "biting Vrah's neck.")]
+    bomo = C.Person("Bomo", {"Bomo"}, True)
+    bomo.rows = [(5, "", 1, "heard", "rock monster bodyguard. Hired by Clarabelle. Level up. "
+                  "Now guards Carl.")]
+    ika = C.Person("Ikicha", {"Ikicha"}, True)
+    ika.rows = [(5, "", 3, "heard", "A crawler who writes notes in the cookbook."),
+                (5, "", 4, "heard", "A crawler.")]
+    r.self_check([bog, lang, bomo, ika])
+    assert "Vrah" in bog.rows[0][4]
+    assert all("Vrah" not in row[4] for row in lang.rows)
+    assert bomo.rows[0][4] == "Rock monster bodyguard. Now guards Carl."
+    assert [row[4] for row in ika.rows] == ["A crawler who writes notes in the cookbook."]
