@@ -36,6 +36,7 @@ every run.
 from __future__ import annotations
 
 import collections
+import itertools
 import json
 import os
 import re
@@ -1419,6 +1420,16 @@ class _Run:
                     p.forms = sorted({f for f in p.forms if f not in others} | {p.name},
                                      key=len, reverse=True)
         shown_people = list(people.values())
+        # what the scorecard calls "twice": say where each one came from
+        for a, b in itertools.combinations(shown_people, 2):
+            if bare(a.name) == bare(b.name) or variant(a.name, b.name):
+                ga = next((g for (g, _s), v in people.items() if v is a), "?")
+                gb = next((g for (g, _s), v in people.items() if v is b), "?")
+                self.log.append("shown twice: %s [entry %s: %s] | %s [entry %s: %s]%s"
+                                % (a.name, ga, ", ".join(sorted(group.get(ga, ()))),
+                                   b.name, gb, ", ".join(sorted(group.get(gb, ()))),
+                                   " (carried)" if ga in self.carried or gb in self.carried
+                                   else ""))
         for p in shown_people:
             p.mentions = C._mentions(self.docs, p.forms)
             p.spoke = C._first_spoken(self.docs, p.forms)
