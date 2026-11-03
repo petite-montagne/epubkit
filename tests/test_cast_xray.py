@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 from epubkit.ai.providers import OllamaProvider, OpenAIProvider
 from epubkit.stages import cast_xray as X
@@ -522,3 +523,17 @@ def test_twice_is_one_name_shown_twice_not_a_relative():
     from epubkit.stages.cast_xray import twice
     assert twice("Lucia Marr", "Lucia Mar") and twice("Princess Donut", "Donut")
     assert not twice("Mrs. Ghazi", "Ghazi") and not twice("Carl", "Donut")
+
+
+def test_a_listed_person_or_the_lead_is_never_turned_into_not_a_person(monkeypatch):
+    """DCC 4, run 10: "Carl" and "Crawler Carl" landed on the not-people list,
+    which would have shut the main character out for the rest of the book."""
+    answers = json.loads(json.dumps(ANSWERS2))
+    answers["Gwen shouted again"]["new"] += [
+        dict(new("Mara Quill", "group", "Sailors like her.", "landed beside Mara Quill"), one="no"),
+        new("Wren Ashby", "place", "The harbour.", "Wren Ashby frowned"),
+    ]
+    monkeypatch.setattr(sys.modules[__name__], "ANSWERS2", answers)
+    _rows, report, _m = run2()
+    bad = [r for r in report if r.startswith("not people:")]
+    assert not any("Mara Quill" in r or "Wren Ashby" in r for r in bad), bad

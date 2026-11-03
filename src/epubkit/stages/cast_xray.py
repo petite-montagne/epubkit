@@ -987,6 +987,11 @@ class _Run:
 
     # -- one answer -------------------------------------------------------
 
+    def is_known(self, n) -> bool:
+        """Listed already, or the book's main character."""
+        return bool(n) and (plain(n) == plain(self.lead or "") or
+                            any(plain(n) in {plain(x) for x in self.names(k)} for k in self.known))
+
     def add(self, p, order, seg, text, ptext):
         if not isinstance(p, dict):
             return
@@ -999,6 +1004,11 @@ class _Run:
             self.log.append("drop %s: not a name" % name)
             return
         if str(p.get("one", "yes")).strip().lower() in ("no", "false", "n"):
+            # someone already listed stays a person: one passage's "the Carls
+            # of the world" must not shut Carl out for the rest of the book
+            if self.is_known(name) or any(self.is_known(a) for a in aliases):
+                self.log.append("kept %s: said not one individual, but already listed" % name)
+                return
             for n in [name] + aliases:
                 self.notpeople[n] = "not one individual"
             self.log.append("not one individual %s (%s)" % (name, typ or "?"))
@@ -1043,6 +1053,8 @@ class _Run:
             return
         if typ not in PERSONLIKE and not exact:
             for n in [name] + aliases:
+                if self.is_known(n):
+                    continue
                 self.notpeople[n] = typ
             self.log.append("not a person %s (%s)" % (name, typ))
             return
