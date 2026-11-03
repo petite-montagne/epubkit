@@ -472,3 +472,10 @@ def test_two_entries_for_one_name_are_joined_at_the_end():
     assert {"Draven Holt", "Corvin Holt"} <= set(r.known)
     assert not X.variant("Manasa", "Mana Genita")
     assert X.variant("Bea", "Miss Beatrice")
+
+
+def test_a_job_word_is_not_a_given_name():
+    r = X._Run(Ctx(), DOCS, Model(), "", False)
+    r.book += " The ringmaster bowed."
+    assert not r.family(["Ringmaster Grimaldi"], "", ["Papa Grimaldi"], "")
+    assert r.family(["Draven Holt"], "", ["Corvin Holt"], "")

@@ -762,8 +762,15 @@ class _Run:
         return len(re.findall(r"\b(?:%s)\b" % "|".join(map(re.escape, f)), ptext)) if f else 0
 
     def family(self, a_names, a_desc, b_names, b_desc) -> bool:
-        """Code's own answer for relatives: never the same person."""
-        return any(same_family(x, y) for x in a_names for y in b_names) or \
+        """Code's own answer for relatives: never the same person. Two names
+        that share a family name are relatives only when both start with a
+        given name: "Ringmaster Grimaldi" / "Papa Grimaldi" start with words
+        the book also writes in lower case, so they go to the guard."""
+        def given(n):
+            w = plain(n).split()
+            return bool(w) and not re.search(r"\b%s\b" % re.escape(w[0]), self.book)
+        return any(same_family(x, y) and given(x) and given(y)
+                   for x in a_names for y in b_names) or \
             kin_of(a_desc, b_names) or kin_of(b_desc, a_names)
 
     def retitled(self, k, name):
@@ -988,7 +995,8 @@ class _Run:
         if not typ:
             self.log.append("drop %s: no type" % name)
             return
-        if self.common_noun(name):
+        known_name = any(plain(name) in {plain(x) for x in self.names(k)} for k in self.known)
+        if not known_name and self.common_noun(name):
             for n in [name] + aliases:
                 self.notpeople[n] = "common noun"
             self.log.append("not a person %s (a word the book also writes in lower case)" % name)
@@ -1249,6 +1257,7 @@ class _Run:
         got = parse(rtext)
         for p in got.get("new") or []:
             self.add(p, order, seg, text, ptext)
+        given: dict = {}                    # change text -> who it went to, this part
         for u in got.get("updates") or []:
             if not isinstance(u, dict):
                 continue
@@ -1259,6 +1268,13 @@ class _Run:
                 self.stats["same"] += 1
                 continue
             why = self.verify(k, u, text, ptext, seg)
+            # one event copied onto a second person ("Reanimated corpse head
+            # biting Vrah's neck" for Bogdon Ro, then for Langley too)
+            same_now = squash(str(u.get("now") or ""))
+            if not why and len(same_now.split()) >= 6 and given.get(same_now, k) != k:
+                why = "same change as %s's" % given[same_now]
+            if not why and same_now:
+                given[same_now] = k
             now = str(u.get("now") or "").strip()
             if not now:
                 why = why or "no 'now'"
