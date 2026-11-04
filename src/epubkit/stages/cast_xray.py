@@ -225,7 +225,7 @@ The part of the book it comes from:
 {context}
 >>>
 
-Is the new line about {name} from the entry? It is not if it describes someone else in this part of the book, or a different character, creature or monster that has the same name. If it is about someone else, the first line of your answer must be exactly DIFFERENT ENTITIES. If it is about {name}, the first line must be exactly SAME."""
+Is the new line about {name} from the entry? In stories people can take a new body, form, species, job or name; that alone never makes them someone else. It is about someone else only if the passage shows another individual: a different person or creature present in this part of the book, or a different one that happens to have the same name. If it is about someone else, the first line of your answer must be exactly DIFFERENT ENTITIES. If it is about {name}, or you cannot tell, the first line must be exactly SAME."""
 
 
 GUARD_LISTED = """
@@ -1282,6 +1282,7 @@ class _Run:
                                       context=context.strip()), SYSTEM, _usable_guard).strip()
         except Exception:                                    # noqa: BLE001
             r = ""
+        self.log.append("whose %s | %s -> %s" % (k, now, r.splitlines()[0] if r else "no answer"))
         if r.upper().startswith("DIFFERENT"):
             self.stats["someone else's"] += 1
             return "about someone else (model)"
