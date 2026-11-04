@@ -215,6 +215,19 @@ B: {b}
 Are A and B the same individual? A parent and child, brothers and sisters, a husband and wife or any two relatives who share a family name are DIFFERENT. If they are different people, the first line of your answer must be exactly DIFFERENT ENTITIES. If they are the same person, the first line must be exactly SAME."""
 
 
+WHOSE = """A character list has this entry:
+{entry}
+
+A new line is proposed for {name}: {now}
+
+The part of the book it comes from:
+<<<
+{context}
+>>>
+
+Is the new line about {name} from the entry? It is not if it describes someone else in this part of the book, or a different character, creature or monster that has the same name. If it is about someone else, the first line of your answer must be exactly DIFFERENT ENTITIES. If it is about {name}, the first line must be exactly SAME."""
+
+
 GUARD_LISTED = """
 
 The series' character list gives both names to one person. Answer SAME unless the entries show they are two different people."""
@@ -1252,6 +1265,28 @@ class _Run:
             return "big claim (%s) the quote does not make" % BIG.search(claim).group(0)
         return ""
 
+    def whose(self, k, now, u, text):
+        """The model's look at a change the code let through: is the new line
+        really this person's? A name near a quote is not enough (Mordecai
+        speaks just before a Hills Cyclops is described), and a monster can
+        share a name with a listed person (a duende mob called Mordecai).
+        Only a clear DIFFERENT turns it down; no answer keeps it."""
+        q = str(u.get("quote") or "").strip()
+        at = text.find(q[:40]) if q else -1
+        if at < 0:
+            at = text.lower().find(q[:40].lower()) if q else -1
+        context = text[max(0, at - 700):at + len(q) + 200] if at >= 0 else q
+        self.calls["whose"] += 1
+        try:
+            r = self.ask(WHOSE.format(entry=self.entry(k), name=k, now=now,
+                                      context=context.strip()), SYSTEM, _usable_guard).strip()
+        except Exception:                                    # noqa: BLE001
+            r = ""
+        if r.upper().startswith("DIFFERENT"):
+            self.stats["someone else's"] += 1
+            return "about someone else (model)"
+        return ""
+
     # -- the whole book ---------------------------------------------------
 
     def go(self):
@@ -1333,6 +1368,8 @@ class _Run:
             now = str(u.get("now") or "").strip()
             if not now:
                 why = why or "no 'now'"
+            if not why:
+                why = self.whose(k, now, u, text)
             if why:
                 self.stats["changes turned down"] += 1
                 self.log.append("change turned down for %s: %s | %s | %s"
@@ -1585,10 +1622,11 @@ class _Run:
         shown_people = [p for p in shown_people if p.mentions or p.name == self.lead]
         rows = C._rows(shown_people, self.lead)
         report = ["%d people written; %d questions (%d parts, %d same-person checks); "
-                  "%d changes kept, %d turned down; %d first descriptions changed"
+                  "%d changes kept, %d turned down (%d as someone else's); %d first descriptions changed"
                   % (len(shown_people), sum(self.calls.values()), self.calls["step"],
                      self.calls["guard"], self.stats["changes kept"],
-                     self.stats["changes turned down"], self.stats["first descriptions changed"])]
+                     self.stats["changes turned down"], self.stats["someone else's"],
+                     self.stats["first descriptions changed"])]
         if self.notpeople:
             report.append("not people: " + ", ".join(sorted(self.notpeople)[:60]))
         if os.environ.get("CAST_HISTORY"):

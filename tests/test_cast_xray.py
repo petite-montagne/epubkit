@@ -538,3 +538,26 @@ def test_a_listed_person_or_the_lead_is_never_turned_into_not_a_person(monkeypat
     _rows, report, _m = run2()
     bad = [r for r in report if r.startswith("not people:")]
     assert not any("Mara Quill" in r or "Wren Ashby" in r for r in bad), bad   # titled too
+
+
+def test_a_change_the_model_says_is_someone_else_s_is_turned_down():
+    # a monster with the same name, or someone described just after Tobin speaks
+    class Namesake(Model):
+        def __call__(self, prompt, system, usable):
+            if prompt.startswith("A character list has this entry"):
+                self.prompts.append(prompt)
+                return "DIFFERENT ENTITIES" if "Tobin Reed" in prompt else "SAME"
+            return super().__call__(prompt, system, usable)
+    model = Namesake()
+    rows, report, _seen = X.build(Ctx(), DOCS, model, hero="Mara Quill")
+    text = " ".join(e for _o, e in entries(rows))
+    assert "Drowned" not in text
+    assert "(1 as someone else's)" in report[0]
+    asked = [p for p in model.prompts if p.startswith("A character list")]
+    assert asked and "Tobin Reed drowned in the river" in asked[0]
+
+
+def test_no_answer_on_whose_line_keeps_the_change():
+    rows, report, model = run()
+    assert any("Drowned" in e for _o, e in entries(rows))
+    assert any(p.startswith("A character list") for p in model.prompts)
