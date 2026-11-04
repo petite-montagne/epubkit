@@ -225,7 +225,7 @@ The part of the book it comes from:
 {context}
 >>>
 
-Is the new line about {name} from the entry? In stories people can take a new body, form, species, job or name; that alone never makes them someone else. It is about someone else only if the passage shows another individual: a different person or creature present in this part of the book, or a different one that happens to have the same name. If it is about someone else, the first line of your answer must be exactly DIFFERENT ENTITIES. If it is about {name}, or you cannot tell, the first line must be exactly SAME."""
+Is the new line about {name} from the entry? In stories people can take a new body, form, species, job or name; that alone never makes them someone else. It is about someone else only if the passage shows another individual: a different person or creature present in this part of the book, or a different one that happens to have the same name (for example a monster, mob or enemy the characters note is only named like {name}). If it is about someone else, the first line of your answer must be exactly DIFFERENT ENTITIES. If it is about {name}, or you cannot tell, the first line must be exactly SAME."""
 
 
 GUARD_LISTED = """
@@ -1275,7 +1275,8 @@ class _Run:
         at = text.find(q[:40]) if q else -1
         if at < 0:
             at = text.lower().find(q[:40].lower()) if q else -1
-        context = text[max(0, at - 700):at + len(q) + 200] if at >= 0 else q
+        # the lines after the quote too: "same name as Mordecai!" comes after the mob's tag
+        context = text[max(0, at - 700):at + len(q) + 700] if at >= 0 else q
         self.calls["whose"] += 1
         try:
             r = self.ask(WHOSE.format(entry=self.entry(k), name=k, now=now,
