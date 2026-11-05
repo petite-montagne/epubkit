@@ -53,6 +53,32 @@ def test_an_answer_key_adds_its_own_checks(tmp_path):
     report(tmp_path / "run", "Book 01", OLD + [("2:1", "Samantha", "A doll head.")])
     key = {"same": [["Donut", "Princess Donut"]], "must": {"1": ["Carl"]},
            "not_before": {"Samantha": 4}, "wrong": [{"name": "Zev", "text": "suspended"}]}
-    _b, _p, k = S.score(tmp_path / "run", key)
+    _b, _p, k, _c = S.score(tmp_path / "run", key)
     assert [len(k[c]) for c in S.KEYED] == [1, 1, 1, 1]
     (tmp_path / "key.json").write_text(json.dumps(key))
+
+
+CASE = {"book": 1, "name": "Mordecai", "also": ["Uncle Morty"],
+        "says": ["cyclops|one-eyed"], "not": ["duende"], "stale": ["guild door"]}
+
+
+def test_a_hard_case_is_judged_on_the_last_entry_the_book_gives():
+    first = [("1:1", "Mordecai", "Guards the guild door.")]
+    assert S.judge(first, CASE)[0] == "out-of-date"
+    later = first + [("2:1", "Mordecai", "A one-eyed Hills Cyclops who trains them.")]
+    assert S.judge(later, CASE)[0] == "pass"
+    assert S.judge([("1:1", "Mordecai", "A duende the team fights.")], CASE)[0] == "wrong"
+    assert S.judge([("1:1", "Mordecai", "A game guide who trains them.")], CASE)[0] == "thin"
+    assert S.judge([("1:1", "Carl", "A crawler with no pants.")], CASE)[0] == "missing"
+    split = later + [("2:2", "Uncle Morty", "A one-eyed Cyclops.")]
+    assert S.judge(split, CASE)[0] == "twice"
+
+
+def test_fewer_hard_cases_passing_is_worse(tmp_path, capsys):
+    report(tmp_path / "old", "b1", [("1:1", "Mordecai", "A one-eyed Hills Cyclops guide.")])
+    report(tmp_path / "new", "b1", [("1:1", "Mordecai", "A duende mob the team fights.")])
+    key = tmp_path / "key.json"
+    key.write_text(json.dumps({"cases": [CASE]}), encoding="utf-8")
+    assert S.main([str(tmp_path / "old"), str(tmp_path / "new"), "--key", str(key)]) == 1
+    out = capsys.readouterr().out
+    assert "1→0 of 1 pass  WORSE" in out and "case wrong" in out

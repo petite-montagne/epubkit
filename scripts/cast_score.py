@@ -24,7 +24,15 @@ scoring only) can add:
   {"same":  [["Uncle Morty", "Mordecai"]],          # one person, two names
    "must":  {"1": ["Carl", "Donut", "Mordecai"]},   # listed in book 1
    "not_before": {"Samantha": 4},                   # a reveal: not listed before book 4
-   "wrong": [{"name": "Langley", "text": "corpse head"}]}  # a line about someone else
+   "wrong": [{"name": "Langley", "text": "corpse head"}],  # a line about someone else
+   "cases": [{"book": 6, "name": "Mordecai", "also": ["Uncle Morty"],
+              "says": ["cyclops|one-eyed"], "not": ["duende"],
+              "stale": ["Tutorial Guild door"]}]}
+A case is one hard character in one book, judged on the last entry the
+book gives them: it passes when the person is listed once (under name or an
+"also" name), the entry matches every "says" pattern, and no "not" or
+"stale" pattern. Each case reports pass, missing, twice, thin (a "says"
+unmet), wrong (a "not" hit) or out-of-date (a "stale" hit).
 Books are numbered by the order of the report files' names.
 
 With two runs, a check that got worse is marked "WORSE" and the exit code
@@ -45,6 +53,7 @@ from epubkit.stages import cast_xray as X  # noqa: E402
 
 CHECKS = ("piled", "fragment", "empty", "broken", "long", "twice")
 KEYED = ("same", "must", "not_before", "wrong")
+VERDICTS = ("pass", "missing", "twice", "thin", "wrong", "out-of-date")
 
 
 def read(folder: Path):
@@ -117,10 +126,41 @@ def keyed(books, key):
     return out
 
 
+def judge(rows, case):
+    """(verdict, last entry) for one hard case in one book's rows."""
+    names = {X.plain(case["name"])} | {X.plain(n) for n in case.get("also", [])}
+    last = {}
+    for _w, name, entry in rows:
+        if X.plain(name) in names:
+            last[X.plain(name)] = entry
+    if not last:
+        return "missing", ""
+    if len(last) > 1:
+        return "twice", " | ".join(last.values())
+    entry = next(iter(last.values()))
+    if any(re.search(p, entry, re.I) for p in case.get("not", [])):
+        return "wrong", entry
+    if any(re.search(p, entry, re.I) for p in case.get("stale", [])):
+        return "out-of-date", entry
+    if not all(re.search(p, entry, re.I) for p in case.get("says", [])):
+        return "thin", entry
+    return "pass", entry
+
+
+def cases(books, key):
+    """[(case, verdict, entry)] for every case whose book is in the run."""
+    lines = {i: rows for i, _f, rows in books}
+    out = []
+    for c in key.get("cases", []) if key else []:
+        if int(c["book"]) in lines:
+            out.append((c, *judge(lines[int(c["book"])], c)))
+    return out
+
+
 def score(folder: Path, key):
     books = read(folder)
     per = {i: faults(rows) for i, _f, rows in books}
-    return books, per, keyed(books, key)
+    return books, per, keyed(books, key), cases(books, key)
 
 
 def main(argv=None) -> int:
@@ -132,7 +172,7 @@ def main(argv=None) -> int:
     key = json.loads(a.key.read_text(encoding="utf-8")) if a.key else {}
     runs = [score(r, key) for r in a.runs[:2]]
     worse = False
-    new_books, new_per, new_key = runs[-1]
+    new_books, new_per, new_key, new_cases = runs[-1]
     old = runs[0] if len(runs) == 2 else None
     print("check       " + "".join("  book %-3d" % i for i, _f, _r in new_books) + "   total")
     for c in CHECKS:
@@ -163,6 +203,21 @@ def main(argv=None) -> int:
                 print("%-10s  %d→%d%s" % (c, o, n, mark))
             else:
                 print("%-10s  %d" % (c, n))
+    if new_cases:
+        print()
+        tally = lambda cs: sum(v == "pass" for _c, v, _e in cs)
+        n, ok = len(new_cases), tally(new_cases)
+        if old:
+            o = tally(old[3])
+            mark = "  WORSE" if ok < o else ("  better" if ok > o else "")
+            worse |= ok < o
+            print("hard cases  %d→%d of %d pass%s" % (o, ok, n, mark))
+        else:
+            print("hard cases  %d of %d pass" % (ok, n))
+        for v in VERDICTS[1:]:
+            k = sum(x == v for _c, x, _e in new_cases)
+            if k:
+                print("  %-11s %d" % (v, k))
     print()
     for i, f, rows in new_books:
         shown = [(c, new_per[i][c]) for c in CHECKS if new_per[i][c]]
@@ -175,6 +230,9 @@ def main(argv=None) -> int:
     for c in KEYED:
         for e in new_key[c][:a.show * 3]:
             print("  %-10s %s" % (c, e[:160]))
+    for c, v, e in new_cases:
+        if v != "pass":
+            print("  case %-11s book %s %s: %s" % (v, c["book"], c["name"], e[:140]))
     return 1 if worse else 0
 
 
