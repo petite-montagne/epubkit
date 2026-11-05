@@ -207,6 +207,33 @@ Rules for "updates" (one per CHECK name, no others):
 - "quote": a short exact quote (under 25 words) from the NEW TEXT that shows the change and names them.
 - If the text shows a person going by a new name, mark them CHANGED and give the new name in "now"."""
 
+# The event-first step (recaps.cast_events): the model says what lasting
+# things happened in the part, then to whom, instead of being asked about
+# each listed name in turn ("did Mordecai change?" invites a yes).
+STEP_EVENTS = STEP.split("Return JSON only")[0] + """Return JSON only, in this shape:
+{{"new": [{{"name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "...", "evidence": "..."}}],
+  "events": [{{"what": "...", "who": "...", "kind": "...", "happened": "yes or no", "lasting": "yes, no or unsure", "quote": "..."}}]}}
+
+""" + STEP.split("Return JSON only")[1].split("\n\n", 1)[1].split("Rules for \"updates\"")[0] + \
+    """Rules for "events":
+- First read the NEW TEXT for things that change someone for good: they die or come back, are born, join or leave a group or side, get or lose a job, rank or title, take a new name, form, body or species, are permanently marked, injured or cursed, or begin or end a lasting bond (marry, break up, become enemies or allies). Then say whom each one happened to.
+- Not events: a fight, a trip, a plan, a mood, a conversation, being knocked out, asleep, frozen, held for a while, summoned or sent away, a level, skill, spell or item.
+- "what": ONE sentence (under 16 words) on the change, naming the person.
+- "who": the one individual it happens to, by the name the text uses. If it is someone who only shares a name with a listed person (a monster or enemy also called that), give the name and add their kind, like "Rook (the troll)".
+- "kind": a few words for the kind of change.
+- "happened": "yes" only if the text shows it happening; "no" if it is only said, planned, feared, imagined, remembered from long before, or a rumour.
+- "lasting": "yes" only if it will still be true after this scene; "unsure" if the text does not show that.
+- "quote": a short exact quote (under 25 words) from the NEW TEXT that shows the change and names the person.
+- If nothing lasting happens, "events" is []."""
+
+REWRITE = """A spoiler-free character list has this entry:
+{entry}
+
+This has just happened in the book: {fact}
+
+Write the new entry for {name}: at most two sentences, under 40 words. First who they are now (their lasting role, kind and relation to the main characters), then this change. Keep what is still true; drop anything this change replaces and anything that only describes one moment or place. Use only the entry and the change above, and no other names. Return only the new entry."""
+
+
 GUARD = """Two entries from a character list:
 
 A: {a}
@@ -529,10 +556,11 @@ def parse(text: str) -> dict:
     except ValueError:
         pass
     # an answer cut short: keep every complete entry
-    got, cut = {"new": [], "updates": []}, (text or "").find('"updates"')
+    second = "events" if '"events"' in (text or "") else "updates"
+    got, cut = {"new": [], second: []}, (text or "").find('"%s"' % second)
     for o in re.finditer(r"\{[^{}]*\}", text or ""):
         try:
-            got["updates" if 0 <= cut < o.start() else "new"].append(json.loads(o.group(0)))
+            got[second if 0 <= cut < o.start() else "new"].append(json.loads(o.group(0)))
         except ValueError:
             pass
     return got
@@ -653,7 +681,10 @@ def build(ctx, docs, ask, *, hero: str = "", first_person: bool = False,
         return C.build(ctx, docs, ask, hero=hero, first_person=first_person, lang=lang,
                        view=view, title=title, workers=workers, names_list=names_list,
                        facts=facts, probe=probe)
-    return _Run(ctx, docs, ask, hero, first_person, view, names_list).go()
+    events = bool(getattr(getattr(getattr(ctx, "config", None), "recaps", None), "cast_events", False)
+                  or os.environ.get("CAST_EVENTS"))
+    run = _Records if events else _Run
+    return run(ctx, docs, ask, hero, first_person, view, names_list).go()
 
 
 class _Run:
@@ -1225,8 +1256,22 @@ class _Run:
                         % (name, "; ".join(changed), desc, new))
         return new
 
-    def verify(self, k, u, text, ptext, seg):
-        """Empty when the change is backed by its quote, else why not."""
+    def nearest(self, before):
+        """The listed person named last in this stretch of text, or None."""
+        best, at = None, -1
+        for e in self.known:
+            for f in self.forms(e):
+                for m in re.finditer(r"\b%s\b" % re.escape(f), before):
+                    if m.start() > at:
+                        best, at = e, m.start()
+        return best
+
+    def verify(self, k, u, text, ptext, seg, subject=False):
+        """Empty when the change is backed by its quote, else why not. With
+        subject, a quote that does not name them must follow a stretch
+        where they are the last person named (not just named somewhere in
+        the 300 characters before, which lets Katia take a line about
+        whoever is named after her)."""
         q = str(u.get("quote") or "").strip()
         sq = squash(q)
         if not sq:
@@ -1245,6 +1290,10 @@ class _Run:
             for _n, t in seg)
         if not (hit(mine, sq) or hit(self.forms(k) + sorted(self.epithets[k]), before) or said):
             return "quote does not name them"
+        if subject and not hit(mine, sq) and not said:
+            last = self.nearest(before)
+            if last and last != k:
+                return "the last person named before the quote is %s" % last
         other = str(u.get("other") or "").strip()
         if other and squash(other) not in ("none", "n a", "nobody", "no one", ""):
             o = self.find(other)
@@ -1340,15 +1389,39 @@ class _Run:
                  "item, group, title...).\n") if unl else ""
         self.calls["step"] += 1
         try:
-            rtext = self.ask(STEP.format(known=manifest, text=text, check=ctext, unlisted=utext,
-                                         and_unlisted=", including each UNLISTED name" if unl
-                                         else ""), SYSTEM, _usable_step)
+            rtext = self.ask(self.step_prompt(manifest, text, ctext, utext, unl),
+                             SYSTEM, _usable_step)
         except Exception as exc:                             # noqa: BLE001
             self.log.append("part %d: no answer (%s)" % (i + 1, exc))
             return
         got = parse(rtext)
         for p in got.get("new") or []:
             self.add(p, order, seg, text, ptext)
+        self.take(got, order, seg, text, ptext)
+        for n, _h in unl:
+            if not self.find(n) and n not in self.notpeople:
+                self.asked[n] += 1
+        here = [k for k in sorted(self.known) if self.count(k, ptext) > 0]
+        done = 0
+        for a, b, why in self.pairs(text, seg, here):
+            fp = frozenset((a, b))
+            if done >= PAIR_MAX or a not in self.known or b not in self.known or a == b \
+                    or fp in self.never or fp in self.asked_pairs:
+                continue
+            self.asked_pairs.add(fp)
+            done += 1
+            self.log.append("pair %s | %s: %s" % (a, b, why))
+            if self.guard(a, b, self.who(b)):
+                self._join(a, b)
+            else:
+                self.never.add(fp)
+
+    def step_prompt(self, manifest, text, ctext, utext, unl):
+        return STEP.format(known=manifest, text=text, check=ctext, unlisted=utext,
+                           and_unlisted=", including each UNLISTED name" if unl else "")
+
+    def take(self, got, order, seg, text, ptext):
+        """Keep each CHANGED update that passes the checks."""
         given: dict = {}                    # change text -> who it went to, this part
         for u in got.get("updates") or []:
             if not isinstance(u, dict):
@@ -1382,23 +1455,6 @@ class _Run:
             para = next((n for n, t in seg if sq[:40] in squash(t)), seg[0][0])
             self.known[k]["change"] = sentence(now, CHANGE_WORDS)
             self.rows.append((order, para, k, self.who(k)))
-        for n, _h in unl:
-            if not self.find(n) and n not in self.notpeople:
-                self.asked[n] += 1
-        here = [k for k in sorted(self.known) if self.count(k, ptext) > 0]
-        done = 0
-        for a, b, why in self.pairs(text, seg, here):
-            fp = frozenset((a, b))
-            if done >= PAIR_MAX or a not in self.known or b not in self.known or a == b \
-                    or fp in self.never or fp in self.asked_pairs:
-                continue
-            self.asked_pairs.add(fp)
-            done += 1
-            self.log.append("pair %s | %s: %s" % (a, b, why))
-            if self.guard(a, b, self.who(b)):
-                self._join(a, b)
-            else:
-                self.never.add(fp)
 
     def self_check(self, shown_people):
         """The last look at every line before it is written, with no model
@@ -1629,8 +1685,99 @@ class _Run:
                      self.calls["guard"], self.stats["changes kept"],
                      self.stats["changes turned down"], self.stats["someone else's"],
                      self.stats["first descriptions changed"])]
+        ev = {k: v for k, v in self.stats.items() if k.startswith("events:")}
+        if self.calls["rewrite"] or ev:
+            report.append("events: %d entries rewritten of %d tries; %s" % (
+                self.stats["entries rewritten"], self.calls["rewrite"],
+                ", ".join("%s %d" % (k[8:], v) for k, v in sorted(ev.items())) or "none left out"))
         if self.notpeople:
             report.append("not people: " + ", ".join(sorted(self.notpeople)[:60]))
         if os.environ.get("CAST_HISTORY"):
             report.extend(self.log)
         return rows, report, C.seen_rows(shown_people, self.lead)
+
+
+class _Records(_Run):
+    """The who's who as one record per person (recaps.cast_events): each
+    part is read for lasting events first and only then for whom they
+    happened to; an event is kept only when the text shows it happening,
+    it lasts, and its quote is about that person; and each kept event
+    rewrites the whole entry, so the first sentence never goes stale
+    ("guards the Tutorial Guild door" six books on)."""
+
+    def step_prompt(self, manifest, text, ctext, utext, unl):
+        return STEP_EVENTS.format(known=manifest, text=text, check="\n", unlisted=utext,
+                                  and_unlisted=", including each UNLISTED name" if unl else "")
+
+    def take(self, got, order, seg, text, ptext):
+        given: dict = {}
+        for e in got.get("events") or []:
+            if not isinstance(e, dict):
+                continue
+            who = str(e.get("who") or "").strip()
+            what = str(e.get("what") or "").strip()
+            if "(" in who:
+                # someone who only shares a listed name (a monster called Mordecai)
+                self.stats["events: namesake"] += 1
+                self.log.append("event left out, a namesake: %s | %s" % (who, what))
+                continue
+            k = self.find(who)
+            if not k:
+                self.stats["events: nobody listed"] += 1
+                continue
+            happened = low(str(e.get("happened") or ""))
+            lasting = low(str(e.get("lasting") or ""))
+            why = ""
+            if not happened.startswith("yes"):
+                why = "not shown happening"
+            elif not lasting.startswith("yes"):
+                why = "not lasting (%s)" % (lasting or "no answer")
+            elif not what:
+                why = "no 'what'"
+            elif PASSING.search(what) and not BIG.search(what):
+                why = "a passing thing"
+            u = {"quote": e.get("quote"), "now": what, "event": e.get("kind") or "", "other": ""}
+            if not why:
+                why = self.verify(k, u, text, ptext, seg, subject=True)
+            sq_what = squash(what)
+            if not why and len(sq_what.split()) >= 6 and given.get(sq_what, k) != k:
+                why = "same change as %s's" % given[sq_what]
+            if not why:
+                given[sq_what] = k
+                why = self.whose(k, what, u, text)
+            if why:
+                self.stats["changes turned down"] += 1
+                self.log.append("event turned down for %s: %s | %s | %s"
+                                % (k, why, what, e.get("quote")))
+                continue
+            self.stats["changes kept"] += 1
+            sq = squash(str(e.get("quote")))
+            para = next((n for n, t in seg if sq[:40] in squash(t)), seg[0][0])
+            self.known[k].setdefault("facts", []).append((order, para, what))
+            self.rewrite(k, what)
+            self.rows.append((order, para, k, self.who(k)))
+
+    def rewrite(self, k, what):
+        """The whole entry again from the old one and the new fact. Kept only
+        when it names no one the two do not; else the old way (first
+        sentence + latest change)."""
+        before = self.entry(k)
+        self.calls["rewrite"] += 1
+        try:
+            r = self.ask(REWRITE.format(entry=before, fact=what, name=k), SYSTEM,
+                         lambda t: bool((t or "").strip()))
+        except Exception:                                    # noqa: BLE001
+            r = ""
+        r = re.sub(r"^\W*(?:new entry|entry)\s*:\s*", "", (r or "").strip(), flags=re.I)
+        r = re.sub(r"^%s\s*:\s*" % re.escape(k), "", r).strip().strip('"').strip()
+        src = squash(before + " " + what)
+        odd = [w for w in re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z'’\-]{2,})", r)
+               if squash(w) not in src and w not in NOT_NAMES]
+        if not r or odd or len(r) > 320:
+            self.log.append("rewrite not used for %s (%s): %s" % (k, "names " + ", ".join(odd)
+                            if odd else "empty or long", r[:120]))
+            self.known[k]["change"] = sentence(what, CHANGE_WORDS)
+            return
+        self.stats["entries rewritten"] += 1
+        self.log.append("rewrite %s | %s -> %s" % (k, what, r))
+        self.known[k]["first"], self.known[k]["change"] = r, ""

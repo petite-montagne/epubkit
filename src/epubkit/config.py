@@ -211,6 +211,12 @@ class RecapConfig:
     #: ai.seed too so runs repeat. With cast_only, "book", "facts" and
     #: "xray" do not read the passages
     cast_method: str = "passages"
+    #: with cast_method = "xray": read each part for lasting events first and
+    #: say whom they happened to after, keep an event only when the text
+    #: shows it happening and lasting and its quote is about that person,
+    #: and rewrite the whole entry from each kept event (one record per
+    #: person). Off: the model is asked about each listed name in turn
+    cast_events: bool = False
     #: with cast_method = "book", write what it did with each book, and every
     #: entry, to <this folder>/<book>.cast.txt. Empty: no report
     cast_report_dir: str = ""

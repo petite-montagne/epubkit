@@ -561,3 +561,92 @@ def test_no_answer_on_whose_line_keeps_the_change():
     rows, report, model = run()
     assert any("Drowned" in e for _o, e in entries(rows))
     assert any(p.startswith("A character list") for p in model.prompts)
+
+
+# ---- the event-first records (recaps.cast_events) --------------------------
+
+def event(who, what, quote, happened="yes", lasting="yes", kind="change"):
+    return {"who": who, "what": what, "kind": kind, "happened": happened, "lasting": lasting,
+            "quote": quote}
+
+
+EVENTS = {
+    "Chapter 1": [],
+    "Chapter 2": [
+        event("Tobin Reed", "Tobin Reed drowned when the ferry struck the rocks.",
+              "Tobin Reed drowned in the river"),
+        # a moment, not a change
+        event("Mara Quill", "Mara Quill is soaked on the ferry.", "Mara Quill and Tobin Reed took",
+              lasting="no"),
+        # only said
+        event("Corvin Holt", "Corvin Holt becomes a merchant.", "Corvin Holt is Draven's father",
+              happened="no"),
+    ],
+    "Chapter 3": [
+        # a namesake the model marks
+        event("Tobin (the eel)", "Tobin the eel is eaten.", "Mara Quill sailed on alone"),
+        # the quote names no one; the last person named before it is Mara, not Draven
+        event("Draven Holt", "Draven Holt is revealed as her uncle.",
+              "and I was your mother's brother"),
+    ],
+}
+
+
+class Events(Model):
+    def __init__(self, rewrite=None):
+        super().__init__()
+        self.rewrite = rewrite
+
+    def __call__(self, prompt, system, usable):
+        if prompt.startswith("A spoiler-free character list"):
+            self.prompts.append(prompt)
+            if self.rewrite is not None:
+                return self.rewrite
+            return "The old ferryman of the harbour town, who drowned when the ferry struck the rocks."
+        if prompt.startswith("A character list has this entry"):
+            self.prompts.append(prompt)
+            return "SAME"
+        got = json.loads(super().__call__(prompt, system, usable))
+        text = prompt.split("NEW TEXT:", 1)[1]
+        for marker, chapter in (("harbour hall", "Chapter 1"), ("came in from the docks", "Chapter 2"),
+                                ("sailed on alone", "Chapter 3")):
+            if marker in text:
+                return json.dumps({"new": got.get("new", []), "events": EVENTS[chapter]})
+        return json.dumps({"new": [], "events": []})
+
+
+def run_events(monkeypatch, model=None):
+    monkeypatch.setenv("CAST_EVENTS", "1")
+    model = model or Events()
+    rows, report, _seen = X.build(Ctx(), DOCS, model, hero="Mara Quill")
+    return rows, report, model
+
+
+def test_events_are_asked_for_without_naming_anyone_to_check(monkeypatch):
+    _rows, _report, model = run_events(monkeypatch)
+    steps = [p for p in model.prompts if "NEW TEXT:" in p]
+    assert steps and all('"events"' in p and "CHECK" not in p for p in steps)
+
+
+def test_a_kept_event_rewrites_the_whole_entry(monkeypatch):
+    rows, report, _m = run_events(monkeypatch)
+    tobin = [(o, e) for o, e in entries(rows) if e.startswith("Tobin")]
+    assert tobin[-1][0] == 2
+    assert tobin[-1][1] == ("Tobin Reed: The old ferryman of the harbour town, who drowned "
+                            "when the ferry struck the rocks.")
+    assert "1 entries rewritten" in " ".join(report)
+
+
+def test_moments_reports_namesakes_and_someone_elses_lines_are_left_out(monkeypatch):
+    rows, report, _m = run_events(monkeypatch)
+    text = " ".join(e for _o, e in entries(rows))
+    for gone in ("soaked", "becomes a merchant", "eel", "her uncle"):
+        assert gone not in text
+    assert "namesake 1" in " ".join(report)
+
+
+def test_a_rewrite_that_brings_in_a_new_name_is_not_used(monkeypatch):
+    model = Events(rewrite="The old ferryman, drowned beside Captain Varga.")
+    rows, _report, _m = run_events(monkeypatch, model)
+    tobin = [e for _o, e in entries(rows) if e.startswith("Tobin")][-1]
+    assert "Varga" not in tobin and "drowned" in tobin
