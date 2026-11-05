@@ -212,14 +212,16 @@ Rules for "updates" (one per CHECK name, no others):
 # each listed name in turn ("did Mordecai change?" invites a yes).
 STEP_EVENTS = STEP.split("Return JSON only")[0] + """Return JSON only, in this shape:
 {{"new": [{{"name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "...", "evidence": "..."}}],
-  "events": [{{"what": "...", "who": "...", "kind": "...", "happened": "yes or no", "lasting": "yes, no or unsure", "quote": "..."}}]}}
+  "events": [{{"what": "...", "who": "...", "kind": "...", "also": "...", "happened": "yes or no", "lasting": "yes, no or unsure", "quote": "..."}}]}}
 
 """ + STEP.split("Return JSON only")[1].split("\n\n", 1)[1].split("Rules for \"updates\"")[0] + \
     """Rules for "events":
 - First read the NEW TEXT for things that change someone for good: they die or come back, are born, join or leave a group or side, get or lose a job, rank or title, take a new name, form, body or species, are permanently marked, injured or cursed, or begin or end a lasting bond (marry, break up, become enemies or allies). Then say whom each one happened to.
 - Not events: a fight, a trip, a plan, a mood, a conversation, being knocked out, asleep, frozen, held for a while, summoned or sent away, a level, skill, spell or item.
 - "what": ONE sentence (under 16 words) on the change, naming the person.
+- A game or system line that gives someone a new kind, form or class ("Name. Kind. Level 50.") is an event. So is a reveal of who someone really is or how they are related.
 - "who": the one individual it happens to, by the name the text uses. If it is someone who only shares a name with a listed person (a monster or enemy also called that), give the name and add their kind, like "Rook (the troll)".
+- "also": when the same event changes a second individual for good (the one killed by "who", the one "who" marries, the one who gets "who"'s mark), their name; else "". Who did it is not "also" unless they change too.
 - "kind": a few words for the kind of change.
 - "happened": "yes" only if the text shows it happening; "no" if it is only said, planned, feared, imagined, remembered from long before, or a rumour.
 - "lasting": "yes" only if it will still be true after this scene; "unsure" if the text does not show that.
@@ -233,7 +235,10 @@ LASTING = """Part of a novel:
 
 A character list is about to say this about {name}: {what}
 
-Is that a lasting change to who {name} is (their life, body or form, name, title, job, rank, side, faith, or a lasting bond with someone), or only something that happens to them for a while (a task or quest, a trip, being called away, a fight, an illness or injury they get over, a mood, a moment in one scene)? If it is lasting and the passage shows it, the first line of your answer must be exactly LASTING. Otherwise, or if you cannot tell, the first line must be exactly FOR A WHILE."""
+Is that a lasting change to who {name} is, or only something that happens to them for a while?
+LASTING: they die or come back; lose a body part, wing or eye, or take a new body, form, kind or class; take a new name, title, role, job, rank, faith or side; are marked, cursed or bound; begin or end a bond with someone (marry, break up, become enemies); or a reveal of who they really are or how they are related. These stay true unless the passage shows them undone.
+FOR A WHILE: a task or quest, a trip, being called away, a fight, a mood, an illness or injury they get over, using or getting an item, one moment in one scene.
+The first line of your answer must be exactly LASTING or exactly FOR A WHILE. If you cannot tell, answer FOR A WHILE."""
 
 PASSING_EVENT = re.compile(r"\b(level|levels|leveled|stats?|points|leaderboard|"
                            r"equips?|equipped|looted|armor)\b", re.I)
@@ -243,7 +248,7 @@ REWRITE = """A spoiler-free character list has this entry:
 
 This has just happened in the book: {fact}
 
-Write the new entry for {name}: at most two sentences, under 40 words. First who they are now (their lasting role, kind and relation to the main characters), then this change. Keep what is still true; drop anything this change replaces and anything that only describes one moment or place. Use only the entry and the change above, and no other names. Return only the new entry."""
+Write the new entry for {name}: at most two sentences, under 40 words. First who they are now (their lasting role, kind and relation to the main characters), then this change. Keep every title, role, kind and relationship the entry gives unless this change ends it; drop anything this change replaces and anything that only describes one moment or place. Use only the entry and the change above, and no other names. Return only the new entry."""
 
 
 GUARD = """Two entries from a character list:
@@ -1268,14 +1273,19 @@ class _Run:
                         % (name, "; ".join(changed), desc, new))
         return new
 
-    def nearest(self, before):
-        """The listed person named last in this stretch of text, or None."""
-        best, at = None, -1
+    def nearest(self, before, after=""):
+        """The listed person named closest to a quote that sits between
+        before and after, or None."""
+        best, gap = None, 10 ** 9
         for e in self.known:
             for f in self.forms(e):
-                for m in re.finditer(r"\b%s\b" % re.escape(f), before):
-                    if m.start() > at:
-                        best, at = e, m.start()
+                pat = r"\b%s\b" % re.escape(f)
+                for m in re.finditer(pat, before):
+                    if len(before) - m.end() < gap:
+                        best, gap = e, len(before) - m.end()
+                m = re.search(pat, after)
+                if m and m.start() < gap:
+                    best, gap = e, m.start()
         return best
 
     def verify(self, k, u, text, ptext, seg, subject=False):
@@ -1303,12 +1313,22 @@ class _Run:
         said = FIRSTP.search(sq) and any(
             sq[:40] in squash(t) and hit(self.forms(k) + sorted(self.epithets[k]), squash(t))
             for _n, t in seg)
-        if not (hit(mine, sq) or hit(self.forms(k) + sorted(self.epithets[k]), before) or said):
+        if subject and not (hit(mine, sq) or said):
+            # a title, kind or pronoun ("the deckmaster", "she"): the
+            # person it stands for is the one named closest to the quote,
+            # before it or just after ("A deity has fallen." then
+            # "Crawler Paz Lo has slain the goddess, Ysalte.")
+            if any(hit(self.forms(e), sq) for e in self.known if e != k):
+                return "the quote names someone else"
+            end = at + len(sq) if at >= 0 else 0
+            after = ptext[end:end + 400] if at >= 0 else ""
+            last = self.nearest(before, after)
+            if last is None:
+                return "quote does not name them"
+            if last != k:
+                return "the person named closest to the quote is %s" % last
+        elif not (hit(mine, sq) or hit(self.forms(k) + sorted(self.epithets[k]), before) or said):
             return "quote does not name them"
-        if subject and not hit(mine, sq) and not said:
-            last = self.nearest(before)
-            if last and last != k:
-                return "the last person named before the quote is %s" % last
         other = str(u.get("other") or "").strip()
         if other and squash(other) not in ("none", "n a", "nobody", "no one", ""):
             o = self.find(other)
@@ -1734,7 +1754,16 @@ class _Records(_Run):
             return i if i >= 0 else len(ptext)
         # in the order the text tells them, so a person's last entry in a
         # part is their latest one (Imani's skulls came after her squad died)
+        # an event that changes two people goes to each ("Paz Lo slays
+        # Ysalte" is news for Ysalte too)
+        both = []
         for e in sorted(evs, key=at):
+            both.append(e)
+            also = str(e.get("also") or "").strip()
+            if also and squash(also) not in ("none", "n a", "nobody", "no one", "") and \
+                    squash(also) != squash(str(e.get("who") or "")):
+                both.append(dict(e, who=also, also="", _also=True))
+        for e in both:
             who = str(e.get("who") or "").strip()
             what = str(e.get("what") or "").strip()
             if "(" in who:
@@ -1767,7 +1796,8 @@ class _Records(_Run):
             if not why:
                 why = self.verify(k, u, text, ptext, seg, subject=True)
             sq_what = squash(what)
-            if not why and len(sq_what.split()) >= 6 and given.get(sq_what, k) != k:
+            if not why and not e.get("_also") and len(sq_what.split()) >= 6 \
+                    and given.get(sq_what, k) != k:
                 why = "same change as %s's" % given[sq_what]
             if not why:
                 given[sq_what] = k

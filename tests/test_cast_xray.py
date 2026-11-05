@@ -670,3 +670,45 @@ def test_an_event_for_a_longer_name_is_not_the_shorter_names(monkeypatch):
     assert run.owner("Ghost Tobin Reed") is False
     assert run.owner("Tobin's Ghost") is False
     assert run.owner("Nobody Here") is None
+
+
+DOCS2 = [
+    (1, "c1.xhtml", "Chapter 1", [
+        (0, "Mara Quill met Tobin Reed and Ilse Varn at the harbour hall."),
+        (1, "Mara Quill talked with Ilse Varn about the old ferry and the long winter ahead of them."),
+        (2, "The ferryman fell from the pier and died. Everyone mourned Tobin Reed that night."),
+        (3, "Then Ilse Varn killed Mara Quill's rival, Oskar Dunn, on the quay."),
+    ]),
+]
+
+
+class Events2(Events):
+    def __call__(self, prompt, system, usable):
+        if "NEW TEXT:" in prompt and "harbour hall" in prompt.split("NEW TEXT:", 1)[1]:
+            self.prompts.append(prompt)
+            return json.dumps({"new": [
+                new("Mara Quill", "person", "A young sailor.", "Mara Quill met"),
+                new("Tobin Reed", "person", "An old ferryman.", "Tobin Reed and Ilse"),
+                new("Ilse Varn", "person", "A dock worker.", "Ilse Varn at the harbour"),
+                new("Oskar Dunn", "person", "Mara's rival.", "rival, Oskar Dunn"),
+            ], "events": [
+                # only "the ferryman": he is named right after
+                event("Tobin Reed", "Tobin Reed dies after falling from the pier.",
+                      "The ferryman fell from the pier and died"),
+                # one event, two people changed
+                dict(event("Ilse Varn", "Ilse Varn kills Oskar Dunn.",
+                           "Ilse Varn killed Mara Quill's rival, Oskar Dunn"),
+                     also="Oskar Dunn"),
+            ]})
+        return super().__call__(prompt, system, usable)
+
+
+def test_a_title_stands_for_the_person_named_closest_and_both_people_get_the_news(monkeypatch):
+    monkeypatch.setenv("CAST_EVENTS", "1")
+    model = Events2()
+    X.build(Ctx(), DOCS2, model, hero="Mara Quill")
+    assert "falling from the pier" in " ".join(p for p in model.prompts
+                                           if p.startswith("A spoiler-free") and "Tobin" in p)
+    oskar = [p for p in model.prompts if p.startswith("A spoiler-free") and "Oskar Dunn:" in p]
+    ilse = [p for p in model.prompts if p.startswith("A spoiler-free") and "Ilse Varn:" in p]
+    assert oskar and ilse
