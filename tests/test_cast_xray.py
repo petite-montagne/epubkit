@@ -583,6 +583,8 @@ EVENTS = {
               happened="no"),
     ],
     "Chapter 3": [
+        # the step says lasting; asked on its own, the model says it is for a while
+        event("Mara Quill", "Mara Quill sets out on a voyage alone.", "Mara Quill sailed on alone"),
         # a namesake the model marks
         event("Tobin (the eel)", "Tobin the eel is eaten.", "Mara Quill sailed on alone"),
         # the quote names no one; the last person named before it is Mara, not Draven
@@ -606,6 +608,9 @@ class Events(Model):
         if prompt.startswith("A character list has this entry"):
             self.prompts.append(prompt)
             return "SAME"
+        if prompt.startswith("Part of a novel"):
+            self.prompts.append(prompt)
+            return "FOR A WHILE" if "voyage" in prompt else "LASTING"
         got = json.loads(super().__call__(prompt, system, usable))
         text = prompt.split("NEW TEXT:", 1)[1]
         for marker, chapter in (("harbour hall", "Chapter 1"), ("came in from the docks", "Chapter 2"),
@@ -640,9 +645,9 @@ def test_a_kept_event_rewrites_the_whole_entry(monkeypatch):
 def test_moments_reports_namesakes_and_someone_elses_lines_are_left_out(monkeypatch):
     rows, report, _m = run_events(monkeypatch)
     text = " ".join(e for _o, e in entries(rows))
-    for gone in ("soaked", "becomes a merchant", "eel", "her uncle"):
+    for gone in ("soaked", "becomes a merchant", "eel", "her uncle", "voyage"):
         assert gone not in text
-    assert "namesake 1" in " ".join(report)
+    assert "namesake 1" in " ".join(report) and "for a while 1" in " ".join(report)
 
 
 def test_a_rewrite_that_brings_in_a_new_name_is_not_used(monkeypatch):

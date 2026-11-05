@@ -226,6 +226,18 @@ STEP_EVENTS = STEP.split("Return JSON only")[0] + """Return JSON only, in this s
 - "quote": a short exact quote (under 25 words) from the NEW TEXT that shows the change and names the person.
 - If nothing lasting happens, "events" is []."""
 
+LASTING = """Part of a novel:
+<<<
+{context}
+>>>
+
+A character list is about to say this about {name}: {what}
+
+Is that a lasting change to who {name} is (their life, body or form, name, title, job, rank, side, faith, or a lasting bond with someone), or only something that happens to them for a while (a task or quest, a trip, being called away, a fight, an illness or injury they get over, a mood, a moment in one scene)? If it is lasting and the passage shows it, the first line of your answer must be exactly LASTING. Otherwise, or if you cannot tell, the first line must be exactly FOR A WHILE."""
+
+PASSING_EVENT = re.compile(r"\b(level|levels|leveled|skills?|spells?|stats?|points|leaderboard|"
+                           r"equipped|looted|armor)\b", re.I)
+
 REWRITE = """A spoiler-free character list has this entry:
 {entry}
 
@@ -1278,8 +1290,11 @@ class _Run:
             return "no quote"
         if sq not in ptext and not quote_ok(q, text):
             return "quote not in text"
+        # the narrator is "I" in the story, and "you" in game messages and
+        # what others say to them ("You have been granted...")
         mine = self.forms(k) + sorted(self.epithets[k]) + \
-            (["i", "me", "my"] if self.known[k]["narrator"] else [])
+            ((["i", "me", "my"] + (["you", "your"] if subject else []))
+             if self.known[k]["narrator"] else [])
 
         def hit(fs, s):
             return any(re.search(r"\b%s\b" % re.escape(f), s) for f in fs)
@@ -1711,9 +1726,15 @@ class _Records(_Run):
 
     def take(self, got, order, seg, text, ptext):
         given: dict = {}
-        for e in got.get("events") or []:
-            if not isinstance(e, dict):
-                continue
+        evs = [e for e in got.get("events") or [] if isinstance(e, dict)]
+
+        def at(e):
+            q = squash(str(e.get("quote") or ""))[:40]
+            i = ptext.find(q) if q else -1
+            return i if i >= 0 else len(ptext)
+        # in the order the text tells them, so a person's last entry in a
+        # part is their latest one (Imani's skulls came after her squad died)
+        for e in sorted(evs, key=at):
             who = str(e.get("who") or "").strip()
             what = str(e.get("what") or "").strip()
             if "(" in who:
@@ -1734,7 +1755,7 @@ class _Records(_Run):
                 why = "not lasting (%s)" % (lasting or "no answer")
             elif not what:
                 why = "no 'what'"
-            elif PASSING.search(what) and not BIG.search(what):
+            elif PASSING_EVENT.search(what) and not BIG.search(what):
                 why = "a passing thing"
             u = {"quote": e.get("quote"), "now": what, "event": e.get("kind") or "", "other": ""}
             if not why:
@@ -1744,7 +1765,7 @@ class _Records(_Run):
                 why = "same change as %s's" % given[sq_what]
             if not why:
                 given[sq_what] = k
-                why = self.whose(k, what, u, text)
+                why = self.whose(k, what, u, text) or self.lasting(k, what, u, text)
             if why:
                 self.stats["changes turned down"] += 1
                 self.log.append("event turned down for %s: %s | %s | %s"
@@ -1756,6 +1777,28 @@ class _Records(_Run):
             self.known[k].setdefault("facts", []).append((order, para, what))
             self.rewrite(k, what)
             self.rows.append((order, para, k, self.who(k)))
+
+    def lasting(self, k, what, u, text):
+        """One plain question about one event, apart from the long step
+        answer (where "lasting: yes" let through Zev being called away and
+        a quest Katia took): a doubt leaves it out."""
+        q = str(u.get("quote") or "").strip()
+        i = text.find(q[:40]) if q else -1
+        if i < 0:
+            i = text.lower().find(q[:40].lower()) if q else -1
+        context = text[max(0, i - 700):i + len(q) + 700] if i >= 0 else q
+        self.calls["lasting"] += 1
+        try:
+            r = self.ask(LASTING.format(context=context.strip(), name=k, what=what), SYSTEM,
+                         lambda t: (t or "").strip().upper().startswith(("LASTING", "FOR A WHILE")))
+        except Exception:                                    # noqa: BLE001
+            r = ""
+        first = r.strip().splitlines()[0] if r and r.strip() else "no answer"
+        self.log.append("lasting %s | %s -> %s" % (k, what, first))
+        if not first.upper().startswith("LASTING"):
+            self.stats["events: for a while"] += 1
+            return "for a while (model)"
+        return ""
 
     def rewrite(self, k, what):
         """The whole entry again from the old one and the new fact. Kept only
