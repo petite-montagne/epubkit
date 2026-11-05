@@ -700,7 +700,9 @@ def build(ctx, docs, ask, *, hero: str = "", first_person: bool = False,
                        facts=facts, probe=probe)
     events = bool(getattr(getattr(getattr(ctx, "config", None), "recaps", None), "cast_events", False)
                   or os.environ.get("CAST_EVENTS"))
-    run = _Records if events else _Run
+    ledger = bool(getattr(getattr(getattr(ctx, "config", None), "recaps", None), "cast_ledger", False)
+                  or os.environ.get("CAST_LEDGER"))
+    run = _Ledger if ledger else _Records if events else _Run
     return run(ctx, docs, ask, hero, first_person, view, names_list).go()
 
 
@@ -1721,6 +1723,10 @@ class _Run:
                      self.stats["changes turned down"], self.stats["someone else's"],
                      self.stats["first descriptions changed"])]
         ev = {k: v for k, v in self.stats.items() if k.startswith("events:")}
+        if self.calls["guide"] or self.calls["decide"]:
+            report.append("ledger: %d guide, %d events, %d looked again, %d decide calls"
+                          % (self.calls["guide"], self.calls["events"], self.calls["cover"],
+                             self.calls["decide"]))
         if self.calls["rewrite"] or ev:
             report.append("events: %d entries rewritten of %d tries; %s" % (
                 self.stats["entries rewritten"], self.calls["rewrite"],
@@ -1801,18 +1807,28 @@ class _Records(_Run):
                 why = "same change as %s's" % given[sq_what]
             if not why:
                 given[sq_what] = k
-                why = self.whose(k, what, u, text) or self.lasting(k, what, u, text)
             if why:
                 self.stats["changes turned down"] += 1
                 self.log.append("event turned down for %s: %s | %s | %s"
                                 % (k, why, what, e.get("quote")))
                 continue
-            self.stats["changes kept"] += 1
             sq = squash(str(e.get("quote")))
             para = next((n for n, t in seg if sq[:40] in squash(t)), seg[0][0])
-            self.known[k].setdefault("facts", []).append((order, para, what))
-            self.rewrite(k, what)
-            self.rows.append((order, para, k, self.who(k)))
+            self.keep(k, what, u, order, para, text)
+
+    def keep(self, k, what, u, order, para, text):
+        """A change that passed the code's checks: the model's two looks,
+        then the entry is rewritten at once."""
+        why = self.whose(k, what, u, text) or self.lasting(k, what, u, text)
+        if why:
+            self.stats["changes turned down"] += 1
+            self.log.append("event turned down for %s: %s | %s | %s"
+                            % (k, why, what, u.get("quote")))
+            return
+        self.stats["changes kept"] += 1
+        self.known[k].setdefault("facts", []).append((order, para, what))
+        self.rewrite(k, what)
+        self.rows.append((order, para, k, self.who(k)))
 
     def owner(self, who):
         """The listed person an event's name is, None when no one, False
@@ -1878,3 +1894,237 @@ class _Records(_Run):
         self.stats["entries rewritten"] += 1
         self.log.append("rewrite %s | %s -> %s" % (k, what, r))
         self.known[k]["first"], self.known[k]["change"] = r, ""
+
+
+# ----------------------------------------------------------- the ledger
+#
+# recaps.cast_ledger: the same records, asked for in small steps the PC's
+# model can do one at a time, and decided once the whole book is read.
+#   1. a reading guide: how this book is told, from its opening;
+#   2. per part, one question for the names and one for the lasting events,
+#      each with worked examples (made up, not from any real book);
+#   3. code checks every event's quote and whose name it is, and logs it;
+#   4. anyone the book keeps naming who has no logged event is looked at
+#      again (code makes sure nobody stays at their first sighting);
+#   5. at the end, each person's whole log goes to the model at once:
+#      KEEP or DROP each change, seeing what came after it; then the kept
+#      ones are written in book order, each entry from earlier facts only.
+
+STEP_NAMES = STEP.split("Return JSON only")[0] + """Return JSON only, in this shape:
+{{"new": [{{"name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "...", "evidence": "..."}}]}}
+
+""" + STEP.split("Return JSON only")[1].split("\n\n", 1)[1].split("Rules for \"updates\"")[0].rstrip()
+
+GUIDE = """The opening of a novel:
+<<<
+{text}
+>>>
+
+Answer about how this book is told, from the text above only. Return JSON only, in this shape:
+{{"narrator": "...", "first_person": "yes or no", "system_messages": "yes or no", "you_in_messages": "...", "changes_form": "yes or no", "shared_names": "yes or no"}}
+- "narrator": the name of the person telling the story, or "" if it is told from outside.
+- "first_person": "yes" if the narrator says "I".
+- "system_messages": "yes" if the story shows game or system notices, screens or messages.
+- "you_in_messages": the name of the person those messages call "you", or "".
+- "changes_form": "yes" if people in this world can take a new body, form, species or class.
+- "shared_names": "yes" if monsters, cards, items, ranks or titles here carry a person's name."""
+
+EXAMPLES = """EXAMPLE 1
+TEXT: Notice: Crawler Vex has been granted the class Ember Monk. A goblin chieftain, also called Vex, laughed at him before Bruno crushed it. Vex was knocked flat but stood up a minute later.
+ANSWER: {"events": [{"who": "Vex", "also": "", "what": "Vex takes the class Ember Monk.", "happened": "yes", "quote": "Crawler Vex has been granted the class Ember Monk"},
+ {"who": "Vex (the goblin chieftain)", "also": "", "what": "A goblin chieftain who shares Vex's name is killed by Bruno.", "happened": "yes", "quote": "A goblin chieftain, also called Vex"}]}
+(Being knocked flat is a moment, not an event. The goblin only shares a name, so its kind goes in brackets.)
+
+EXAMPLE 2
+TEXT: Everyone in the village said the miller had poisoned his wife. Inspector Dray proved it was the miller's brother, Aldo, and arrested him that night. The headmistress named Hollis captain of the Ravens.
+ANSWER: {"events": [{"who": "Aldo", "also": "", "what": "Aldo is shown to be the poisoner and is arrested.", "happened": "yes", "quote": "proved it was the miller's brother, Aldo, and arrested him"},
+ {"who": "Hollis", "also": "", "what": "Hollis becomes captain of the Ravens.", "happened": "yes", "quote": "named Hollis captain of the Ravens"}]}
+(What the village said about the miller is a rumour, not an event.)
+
+EXAMPLE 3
+TEXT: The old queen fell beneath the knight's blade. Sir Tamsin had slain Queen Orla, and the crown passed to her daughter, Brin. Brin swore she would one day take back the eastern hills.
+ANSWER: {"events": [{"who": "Sir Tamsin", "also": "Queen Orla", "what": "Sir Tamsin kills Queen Orla.", "happened": "yes", "quote": "Sir Tamsin had slain Queen Orla"},
+ {"who": "Brin", "also": "", "what": "Brin becomes queen after her mother's death.", "happened": "yes", "quote": "the crown passed to her daughter, Brin"}]}
+(Queen Orla is changed too, so she is "also". Brin's oath is a plan, not an event.)"""
+
+EVENTS = """{about}NEW TEXT:
+<<<
+{text}
+>>>
+
+What happens in the NEW TEXT that changes someone for good? They die or come back, are born, join or leave a group or side, get or lose a job, rank, title or class, take a new name, body, form or species, lose a body part, are marked or cursed for good, begin or end a lasting bond (marry, break up, become enemies), or are shown to be someone else or someone's relative.{only}
+Not events: a fight, a trip, a plan, an oath, a mood, a talk, being knocked out, asleep, frozen or held for a while, being sent away or called away, a level, skill, spell or item, a rumour.
+- "who": the one individual it happens to, by the name the text uses. Someone who only shares a person's name gets their kind in brackets: "Vex (the goblin chieftain)".
+- "also": a second individual the same event changes for good, else "".
+- "what": ONE sentence (under 16 words) naming the person.
+- "happened": "yes" only if the text shows it happening, not only says it might, will, or was rumoured to.
+- "quote": a short exact quote (under 25 words) from the NEW TEXT that shows it.
+If nothing lasting happens, answer {{"events": []}}.
+
+{examples}
+
+Return JSON only, in this shape:
+{{"events": [{{"who": "...", "also": "...", "what": "...", "happened": "yes or no", "quote": "..."}}]}}"""
+
+DECIDE = """{about}A spoiler-free character list has this entry for {name} from before these pages:
+{entry}
+
+Possible changes for {name}, in the order the book tells them, each with its passage:
+{items}
+
+For each one, answer KEEP if it is a lasting change to {name} themselves that the passage shows happening: their life or death, body or form, name, title, role, job, rank, class, side or faith, a bond begun or ended, or a reveal of who they are. Answer DROP if it is about someone else (even someone with the same name), only a moment, a plan, a rumour, an item, or something that wears off. Use the later ones too: a change that a later one undoes or shows was only for a while is DROP.
+Return JSON only, one answer per number, like {{"1": "KEEP", "2": "DROP"}}."""
+
+COVER_MIN, COVER_MAX, DECIDE_BATCH = 12, 40, 8
+
+
+def _usable_events(t: str) -> bool:
+    return bool(re.search(r"\{.*\}", t or "", re.S))
+
+
+class _Ledger(_Records):
+    """recaps.cast_ledger: see the notes above EXAMPLES."""
+
+    def go(self):
+        ctx = self.ctx
+        self.about = self.reading_guide()
+        self.log.append("main character: %s" % (", ".join(sorted(self.hero)) or "none found"))
+        self.cands = collections.defaultdict(list)
+        total = len(self.parts)
+        for i, (order, seg) in enumerate(self.parts):
+            ctx.report("who's who: part %d/%d" % (i + 1, total))
+            self.part_no = i
+            self.one_part(i, order, seg)
+        ctx.report("who's who: looking again at people with no changes")
+        self.cover()
+        ctx.report("who's who: deciding each person's changes")
+        self.decide()
+        return self.finish()
+
+    # -- 1. how this book is told ------------------------------------------
+
+    def reading_guide(self):
+        opening = ""
+        for _o, seg in self.parts:
+            opening += "\n".join(t for _n, t in seg) + "\n"
+            if len(opening) >= PASSAGE:
+                break
+        self.calls["guide"] += 1
+        try:
+            got = parse(self.ask(GUIDE.format(text=opening[:PASSAGE + 4000]), SYSTEM, _usable_step))
+        except Exception:                                    # noqa: BLE001
+            got = {}
+
+        def yes(k):
+            return low(str(got.get(k) or "")).startswith("yes")
+        narr = norm(str(got.get("narrator") or "").strip())
+        you = norm(str(got.get("you_in_messages") or "").strip())
+        # the guide only adds a narrator when the book's own count found none
+        if narr and proper(narr) and not self.hero and yes("first_person"):
+            self.hero = {narr: NARRATOR}
+            self.lead = narr
+        lines = []
+        lead = self.lead or narr
+        if yes("first_person") and lead:
+            lines.append("It is told in the first person by %s: \"I\" is %s." % (lead, lead))
+        if yes("system_messages"):
+            lines.append("It shows game or system messages%s." % (
+                "; when they say \"you\" they mean %s" % (you or lead) if (you or lead) else ""))
+        if yes("changes_form"):
+            lines.append("People can take a new body, form, species or class; that does not "
+                         "make them someone else.")
+        if yes("shared_names"):
+            lines.append("Monsters, cards, items, ranks or titles can carry a person's name; "
+                         "those are not that person.")
+        self.log.append("reading guide: %s" % (" ".join(lines) or "nothing to note"))
+        return ("ABOUT THIS BOOK: " + " ".join(lines) + "\n\n") if lines else ""
+
+    # -- 2. names, then events -------------------------------------------
+
+    def step_prompt(self, manifest, text, ctext, utext, unl):
+        return self.about + STEP_NAMES.format(
+            known=manifest, text=text, check="\n", unlisted=utext,
+            and_unlisted=", including each UNLISTED name" if unl else "")
+
+    def events_for(self, text, only=""):
+        self.calls["events"] += 1
+        try:
+            got = parse(self.ask(EVENTS.format(about=self.about, text=text, examples=EXAMPLES,
+                                               only=only), SYSTEM, _usable_events))
+        except Exception:                                    # noqa: BLE001
+            return []
+        # whether it lasts is decided at the end of the book, not here
+        return [dict(e, lasting="yes") for e in got.get("events") or [] if isinstance(e, dict)]
+
+    def take(self, got, order, seg, text, ptext):
+        super().take({"events": self.events_for(text)}, order, seg, text, ptext)
+
+    # -- 3. log, do not decide yet -----------------------------------------
+
+    def keep(self, k, what, u, order, para, text):
+        q = str(u.get("quote") or "").strip()
+        i = text.find(q[:40]) if q else -1
+        if i < 0:
+            i = text.lower().find(q[:40].lower()) if q else -1
+        context = text[max(0, i - 600):i + len(q) + 400] if i >= 0 else q
+        if any(c["what"] == what and c["order"] == order for c in self.cands[k]):
+            return
+        self.cands[k].append(dict(order=order, para=para, what=what, quote=q,
+                                  context=re.sub(r"\s+", " ", context).strip()))
+        self.stats["events: logged"] += 1
+        self.log.append("logged %s | %s | %s" % (k, what, q))
+
+    # -- 4. nobody stays at their first sighting ------------------------------
+
+    def cover(self):
+        squashed = [squash("\n".join(t for _n, t in seg)) for _o, seg in self.parts]
+        named = {k: [self.count(k, p) for p in squashed] for k in self.known}
+        todo = sorted((k for k, n in named.items() if sum(n) >= COVER_MIN and not self.cands[k]),
+                      key=lambda k: -sum(named[k]))[:COVER_MAX]
+        for k in todo:
+            # the part that names them most, the later one on a tie: where a
+            # change is likeliest to show
+            i = max(range(len(self.parts)), key=lambda j: (named[k][j], j))
+            order, seg = self.parts[i]
+            text = "\n".join(t for _n, t in seg)
+            self.calls["cover"] += 1
+            self.stats["events: looked at again"] += 1
+            evs = [e for e in self.events_for(
+                text, only="\nLook only for lasting changes to %s." % k)
+                if self.owner(str(e.get("who") or "")) == k
+                or self.owner(str(e.get("also") or "")) == k]
+            self.log.append("looked again at %s in part %d: %d events" % (k, i + 1, len(evs)))
+            if evs:
+                _Records.take(self, {"events": evs}, order, seg, text, squashed[i])
+
+    # -- 5. decide with the whole log, then write in book order ---------------
+
+    def decide(self):
+        for k in sorted(self.cands):
+            cs = sorted(self.cands[k], key=lambda c: (c["order"], c["para"]))
+            if not cs:
+                continue
+            verdict = {}
+            for start in range(0, len(cs), DECIDE_BATCH):
+                batch = cs[start:start + DECIDE_BATCH]
+                items = "\n".join('%d. %s\n   Passage: "%s"' % (n + 1, c["what"], c["context"])
+                                  for n, c in enumerate(batch))
+                self.calls["decide"] += 1
+                try:
+                    got = parse(self.ask(DECIDE.format(about=self.about, name=k,
+                                                       entry=self.entry(k), items=items),
+                                         SYSTEM, _usable_events))
+                except Exception:                            # noqa: BLE001
+                    got = {}
+                for n, c in enumerate(batch):
+                    a = str(got.get(str(n + 1)) or "").strip().upper()
+                    verdict[id(c)] = a.startswith("KEEP")
+                    self.log.append("decide %s | %s -> %s" % (k, c["what"], a or "no answer"))
+            for c in cs:
+                if not verdict.get(id(c)):
+                    self.stats["changes turned down"] += 1
+                    continue
+                self.stats["changes kept"] += 1
+                self.known[k].setdefault("facts", []).append((c["order"], c["para"], c["what"]))
+                self.rewrite(k, c["what"])
+                self.rows.append((c["order"], c["para"], k, self.who(k)))

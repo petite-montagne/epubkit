@@ -712,3 +712,81 @@ def test_a_title_stands_for_the_person_named_closest_and_both_people_get_the_new
     oskar = [p for p in model.prompts if p.startswith("A spoiler-free") and "Oskar Dunn:" in p]
     ilse = [p for p in model.prompts if p.startswith("A spoiler-free") and "Ilse Varn:" in p]
     assert oskar and ilse
+
+
+# ---- the ledger (recaps.cast_ledger) ---------------------------------------
+
+LEDGER_EVENTS = {
+    "came in from the docks": [
+        event("Tobin Reed", "Tobin Reed drowns when the ferry hits the rocks.",
+              "Tobin Reed drowned in the river"),
+        event("Mara Quill", "Mara Quill is soaked on the ferry.", "Mara Quill and Tobin Reed took"),
+    ],
+    "sailed on alone": [
+        event("Tobin (the eel)", "An eel that shares Tobin's name is eaten.",
+              "Mara Quill sailed on alone"),
+    ],
+}
+
+
+class Ledger(Model):
+    def __call__(self, prompt, system, usable):
+        if prompt.startswith("The opening of a novel"):
+            self.prompts.append(prompt)
+            return json.dumps({"narrator": "Mara Quill", "first_person": "no",
+                               "system_messages": "no", "you_in_messages": "",
+                               "changes_form": "yes", "shared_names": "yes"})
+        if "Possible changes for" in prompt:
+            self.prompts.append(prompt)
+            items = prompt.split("Possible changes for", 1)[1]
+            n = len([l for l in items.splitlines() if l[:1].isdigit() and l[1:3] == ". "])
+            return json.dumps({str(i + 1): "DROP" if "soaked" in items.split("%d. " % (i + 1), 1)[1]
+                               .split("\n")[0] else "KEEP" for i in range(n)})
+        if prompt.startswith("A spoiler-free character list has this entry:"):
+            self.prompts.append(prompt)
+            return "The old ferryman of the harbour town, who drowned when the ferry hit the rocks."
+        if "changes someone for good?" in prompt:
+            self.prompts.append(prompt)
+            text = prompt.split("NEW TEXT:", 1)[1].split(">>>", 1)[0]
+            for marker, evs in LEDGER_EVENTS.items():
+                if marker in text:
+                    return json.dumps({"events": evs})
+            return json.dumps({"events": []})
+        return super().__call__(prompt, system, usable)
+
+
+def run_ledger(monkeypatch, cover_min=99):
+    monkeypatch.setenv("CAST_LEDGER", "1")
+    monkeypatch.setattr(X, "COVER_MIN", cover_min)
+    model = Ledger()
+    rows, report, _seen = X.build(Ctx(), DOCS, model, hero="Mara Quill")
+    return rows, report, model
+
+
+def test_the_ledger_reads_the_book_first_and_tells_every_question(monkeypatch):
+    _rows, report, model = run_ledger(monkeypatch)
+    assert model.prompts[0].startswith("The opening of a novel")
+    asked = [p for p in model.prompts if "changes someone for good?" in p]
+    assert asked and all(p.startswith("ABOUT THIS BOOK: ") and "EXAMPLE 1" in p for p in asked)
+    assert "carry a person's name" in asked[0]
+    assert any("reading guide:" in l for l in report) or "ledger:" in " ".join(report)
+
+
+def test_the_ledger_decides_at_the_end_and_writes_only_kept_changes(monkeypatch):
+    rows, report, model = run_ledger(monkeypatch)
+    text = " ".join(e for _o, e in entries(rows))
+    assert "drowned when the ferry hit the rocks" in text
+    assert "soaked" not in text and "eel" not in text
+    decided = [p for p in model.prompts if "Possible changes for" in p]
+    assert decided and all("Passage:" in p for p in decided)
+    # nothing about a change is written while the book is still being read
+    first_rewrite = next(i for i, p in enumerate(model.prompts)
+                         if p.startswith("A spoiler-free character list has this entry:"))
+    assert first_rewrite > model.prompts.index(decided[0])
+
+
+def test_someone_the_book_keeps_naming_gets_a_second_look(monkeypatch):
+    _rows, report, model = run_ledger(monkeypatch, cover_min=2)
+    again = [p for p in model.prompts if "Look only for lasting changes to" in p]
+    assert any("Draven Holt" in p for p in again)
+    assert not any("Look only for lasting changes to Tobin Reed" in p for p in again)

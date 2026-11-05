@@ -217,6 +217,12 @@ class RecapConfig:
     #: and rewrite the whole entry from each kept event (one record per
     #: person). Off: the model is asked about each listed name in turn
     cast_events: bool = False
+    #: with cast_method = "xray": the ledger (stages/cast_xray.py, _Ledger):
+    #: a reading guide per book, one question for names and one for events
+    #: per part with worked examples, every change logged and decided per
+    #: person once the book is read, and a second look at anyone the book
+    #: keeps naming who has no change. Wins over cast_events
+    cast_ledger: bool = False
     #: with cast_method = "book", write what it did with each book, and every
     #: entry, to <this folder>/<book>.cast.txt. Empty: no report
     cast_report_dir: str = ""
