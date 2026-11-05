@@ -70,6 +70,8 @@ def test_a_hard_case_is_judged_on_the_last_entry_the_book_gives():
     assert S.judge([("1:1", "Mordecai", "A duende the team fights.")], CASE)[0] == "wrong"
     assert S.judge([("1:1", "Mordecai", "A game guide who trains them.")], CASE)[0] == "thin"
     assert S.judge([("1:1", "Carl", "A crawler with no pants.")], CASE)[0] == "missing"
+    mid = [("1:1", "Mordecai", "A duende the team fights.")] + later[1:]
+    assert S.judge(mid, CASE)[0] == "wrong"
     split = later + [("2:2", "Uncle Morty", "A one-eyed Cyclops.")]
     assert S.judge(split, CASE)[0] == "twice"
 

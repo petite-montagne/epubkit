@@ -30,8 +30,8 @@ scoring only) can add:
               "stale": ["Tutorial Guild door"]}]}
 A case is one hard character in one book, judged on the last entry the
 book gives them: it passes when the person is listed once (under name or an
-"also" name), the entry matches every "says" pattern, and no "not" or
-"stale" pattern. Each case reports pass, missing, twice, thin (a "says"
+"also" name), the entry matches every "says" pattern, and no "stale"
+pattern, and no entry of theirs anywhere in the book matches a "not". Each case reports pass, missing, twice, thin (a "says"
 unmet), wrong (a "not" hit) or out-of-date (a "stale" hit).
 Books are numbered by the order of the report files' names.
 
@@ -129,17 +129,20 @@ def keyed(books, key):
 def judge(rows, case):
     """(verdict, last entry) for one hard case in one book's rows."""
     names = {X.plain(case["name"])} | {X.plain(n) for n in case.get("also", [])}
-    last = {}
+    last, every = {}, []
     for _w, name, entry in rows:
         if X.plain(name) in names:
             last[X.plain(name)] = entry
+            every.append(entry)
     if not last:
         return "missing", ""
     if len(last) > 1:
         return "twice", " | ".join(last.values())
     entry = next(iter(last.values()))
-    if any(re.search(p, entry, re.I) for p in case.get("not", [])):
-        return "wrong", entry
+    # a wrong line is wrong wherever in the book it shows, not only last
+    bad = next((e for e in every if any(re.search(p, e, re.I) for p in case.get("not", []))), "")
+    if bad:
+        return "wrong", bad
     if any(re.search(p, entry, re.I) for p in case.get("stale", [])):
         return "out-of-date", entry
     if not all(re.search(p, entry, re.I) for p in case.get("says", [])):
