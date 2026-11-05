@@ -655,3 +655,18 @@ def test_a_rewrite_that_brings_in_a_new_name_is_not_used(monkeypatch):
     rows, _report, _m = run_events(monkeypatch, model)
     tobin = [e for _o, e in entries(rows) if e.startswith("Tobin")][-1]
     assert "Varga" not in tobin and "drowned" in tobin
+
+
+def test_an_event_for_a_longer_name_is_not_the_shorter_names(monkeypatch):
+    # "Tobin Reed" is listed; "Ghost Tobin Reed" is something else; "Tobin" is him
+    run = X._Records(Ctx(), DOCS, Events(), "Mara Quill", False)
+    run.known["Tobin Reed"] = dict(aliases=[], type="person", first="The ferryman.", change="",
+                                   narrator=False)
+    run.notpeople["Tobin's Ghost"] = "item"
+    assert run.owner("Tobin") == "Tobin Reed"
+    assert run.owner("Tobin Reed") == "Tobin Reed"
+    assert run.owner("Crawler Tobin Reed") == "Tobin Reed"
+    assert run.owner("Captain Tobin Reed") == "Tobin Reed"
+    assert run.owner("Ghost Tobin Reed") is False
+    assert run.owner("Tobin's Ghost") is False
+    assert run.owner("Nobody Here") is None

@@ -235,8 +235,8 @@ A character list is about to say this about {name}: {what}
 
 Is that a lasting change to who {name} is (their life, body or form, name, title, job, rank, side, faith, or a lasting bond with someone), or only something that happens to them for a while (a task or quest, a trip, being called away, a fight, an illness or injury they get over, a mood, a moment in one scene)? If it is lasting and the passage shows it, the first line of your answer must be exactly LASTING. Otherwise, or if you cannot tell, the first line must be exactly FOR A WHILE."""
 
-PASSING_EVENT = re.compile(r"\b(level|levels|leveled|skills?|spells?|stats?|points|leaderboard|"
-                           r"equipped|looted|armor)\b", re.I)
+PASSING_EVENT = re.compile(r"\b(level|levels|leveled|stats?|points|leaderboard|"
+                           r"equips?|equipped|looted|armor)\b", re.I)
 
 REWRITE = """A spoiler-free character list has this entry:
 {entry}
@@ -1742,7 +1742,13 @@ class _Records(_Run):
                 self.stats["events: namesake"] += 1
                 self.log.append("event left out, a namesake: %s | %s" % (who, what))
                 continue
-            k = self.find(who)
+            k = self.owner(who)
+            if k is False:
+                # "Alpha Carl" (a card) is not Carl: a name with a word none
+                # of the person's names has is someone else
+                self.stats["events: namesake"] += 1
+                self.log.append("event left out, another name: %s | %s" % (who, what))
+                continue
             if not k:
                 self.stats["events: nobody listed"] += 1
                 continue
@@ -1777,6 +1783,24 @@ class _Records(_Run):
             self.known[k].setdefault("facts", []).append((order, para, what))
             self.rewrite(k, what)
             self.rows.append((order, para, k, self.who(k)))
+
+    def owner(self, who):
+        """The listed person an event's name is, None when no one, False
+        when the name belongs to someone or something else: a name on the
+        not-people list, or one with a word that none of the found
+        person's names has ("Alpha Carl" for Carl)."""
+        n = norm(who)
+        if any(plain(n) == plain(x) for x in self.notpeople):
+            return False
+        k = self.find(n)
+        if not k:
+            return None
+        if plain(n) in {plain(x) for x in self.names(k)}:
+            return k
+        words = set().union(*({w for w in low(x).split()} for x in self.names(k)))
+        extra = [w for w in low(n).split() if w not in words and w not in STOPW
+                 and w not in GENERIC and not re.match(RANKS, w + " ")]
+        return False if extra else k
 
     def lasting(self, k, what, u, text):
         """One plain question about one event, apart from the long step
