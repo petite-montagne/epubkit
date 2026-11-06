@@ -246,9 +246,12 @@ PASSING_EVENT = re.compile(r"\b(level|levels|leveled|stats?|points|leaderboard|"
 REWRITE = """A spoiler-free character list has this entry:
 {entry}
 
-This has just happened in the book: {fact}
+What has happened to {name} since, in the order the book tells it:
+{fact}
 
-Write the new entry for {name}: at most two sentences, under 40 words. First who they are now (their lasting role, kind and relation to the main characters), then this change. Keep every title, role, kind and relationship the entry gives unless this change ends it; drop anything this change replaces and anything that only describes one moment or place. Use only the entry and the change above, and no other names. Return only the new entry."""
+Write the new entry for {name}: at most two sentences, under 40 words, without their name or any heading at the start. First who they are now (their lasting role, kind and relation to the main characters), then the latest change. Keep every title, role, kind and relationship unless a later change ends it; leave out anything a later change replaces and anything that only describes one moment or place. Use only what is written above, and no other names. Return only the new entry."""
+
+HEADER = re.compile(r"^[^.:]{0,80}?\(also [^)]*\)\s*:\s*")
 
 
 GUARD = """Two entries from a character list:
@@ -736,7 +739,9 @@ class _Run:
         self.book_sq = squash(book_text)
         # a one-word "name" the book also writes in lower case is a common
         # noun (a species, a job): "changeling", "grull"
-        self.lower_words = set(re.findall(r"(?<![\w’'.!?:\"“] )\b([a-z][a-z'’\-]{2,})\b", book_text))
+        self.lower_words = collections.Counter(
+            re.findall(r"(?<![\w’'.!?:\"“] )\b([a-z][a-z'’\-]{2,})\b", book_text))
+        self.cap_words = collections.Counter(re.findall(r"\b([A-Z][a-z'’\-]{2,})\b", book_text))
         self.parts = [(o, seg) for o, _p, _l, ps in self.docs for seg in _segments(ps, PASSAGE)]
         # the earlier books: everyone the reader already knows starts from
         # who they were when the last book ended, not from a vague first
@@ -973,8 +978,11 @@ class _Run:
         ("changeling"), or written as one of many - "a Kobold", "two more
         Kobolds" - at least twice."""
         w = low(name).split()
+        # a word the book mostly capitalises is a name, even if it is also
+        # written in lower case now and then ("Elle", and "elle" in French)
         if low(name) in GENERIC or (len(w) == 1 and len(name.split()) == 1
-                                    and w[0] in self.lower_words):
+                                    and self.lower_words[w[0]] >= max(
+                                        1, self.cap_words[w[0][:1].upper() + w[0][1:]])):
             return True
         if len(name.split()) > 2:
             return False
@@ -1874,16 +1882,25 @@ class _Records(_Run):
         """The whole entry again from the old one and the new fact. Kept only
         when it names no one the two do not; else the old way (first
         sentence + latest change)."""
-        before = self.entry(k)
+        # always from who they were before this book's changes plus every
+        # change since, never from the last rewrite: a chain of rewrites
+        # gains and loses facts at each step
+        rec = self.known[k]
+        rec.setdefault("base", HEADER.sub("", self.who(k)))
+        facts = rec.setdefault("since", [])
+        facts.append(what)
+        before = rec["base"]
+        fact = "\n".join("- " + f for f in facts[-6:])
         self.calls["rewrite"] += 1
         try:
-            r = self.ask(REWRITE.format(entry=before, fact=what, name=k), SYSTEM,
+            r = self.ask(REWRITE.format(entry=before, fact=fact, name=k), SYSTEM,
                          lambda t: bool((t or "").strip()))
         except Exception:                                    # noqa: BLE001
             r = ""
         r = re.sub(r"^\W*(?:new entry|entry)\s*:\s*", "", (r or "").strip(), flags=re.I)
+        r = HEADER.sub("", r)
         r = re.sub(r"^%s\s*:\s*" % re.escape(k), "", r).strip().strip('"').strip()
-        src = squash(before + " " + what)
+        src = squash(before + " " + fact + " " + " ".join(self.names(k)))
         odd = [w for w in re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z'’\-]{2,})", r)
                if squash(w) not in src and w not in NOT_NAMES]
         if not r or odd or len(r) > 320:
@@ -1972,10 +1989,11 @@ DECIDE = """{about}A spoiler-free character list has this entry for {name} from 
 Possible changes for {name}, in the order the book tells them, each with its passage:
 {items}
 
-For each one, answer KEEP if it is a lasting change to {name} themselves that the passage shows happening: their life or death, body or form, name, title, role, job, rank, class, side or faith, a bond begun or ended, or a reveal of who they are. Answer DROP if it is about someone else (even someone with the same name), only a moment, a plan, a rumour, an item, or something that wears off. Use the later ones too: a change that a later one undoes or shows was only for a while is DROP.
+For each one, answer KEEP if the passage shows it happening to {name} and it lasts: their life or death, body or form, name, title, role, job, rank, class, side or faith, a bond begun or ended, or a reveal of who they are. It counts even when someone else does it to {name} (kills, transforms, marks, curses, hires or marries them).
+Answer DROP only if it is about another individual (even one with the same name), or only a moment, a plan, a rumour, an item, or something that wears off, or a later item plainly undoes it.
 Return JSON only, one answer per number, like {{"1": "KEEP", "2": "DROP"}}."""
 
-COVER_MIN, COVER_MAX, DECIDE_BATCH = 12, 40, 8
+COVER_MIN, COVER_MAX, DECIDE_BATCH = 12, 80, 8
 
 
 def _usable_events(t: str) -> bool:

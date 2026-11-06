@@ -129,6 +129,13 @@ def keyed(books, key):
 def judge(rows, case):
     """(verdict, last entry) for one hard case in one book's rows."""
     names = {X.plain(case["name"])} | {X.plain(n) for n in case.get("also", [])}
+    # a key's one-word name is the listed person whose full name starts
+    # with it, when only one does ("Imani" is "Imani C.")
+    if not any(X.plain(n) in names for _w, n, _e in rows):
+        first = {X.plain(n) for _w, n, _e in rows
+                 if len(n.split()) > 1 and X.plain(n).split()[0] in names}
+        if len(first) == 1:
+            names |= first
     last, every = {}, []
     for _w, name, entry in rows:
         if X.plain(name) in names:

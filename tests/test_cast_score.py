@@ -84,3 +84,10 @@ def test_fewer_hard_cases_passing_is_worse(tmp_path, capsys):
     assert S.main([str(tmp_path / "old"), str(tmp_path / "new"), "--key", str(key)]) == 1
     out = capsys.readouterr().out
     assert "1→0 of 1 pass  WORSE" in out and "case wrong" in out
+
+
+def test_a_one_word_key_name_finds_the_one_full_name_it_starts():
+    case = {"book": 1, "name": "Imani", "says": ["healer"]}
+    assert S.judge([("1:1", "Imani C.", "A healer with wings.")], case)[0] == "pass"
+    two = [("1:1", "Imani C.", "A healer."), ("1:2", "Imani Rose", "A healer.")]
+    assert S.judge(two, case)[0] == "missing"

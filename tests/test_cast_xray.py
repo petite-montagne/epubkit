@@ -790,3 +790,28 @@ def test_someone_the_book_keeps_naming_gets_a_second_look(monkeypatch):
     again = [p for p in model.prompts if "Look only for lasting changes to" in p]
     assert any("Draven Holt" in p for p in again)
     assert not any("Look only for lasting changes to Tobin Reed" in p for p in again)
+
+
+def test_a_word_the_book_mostly_capitalises_is_a_name():
+    run = X._Run(Ctx(), DOCS, Model(), "Mara Quill", False)
+    run.lower_words["mara"] += 1                     # one stray lower-case use
+    assert not run.common_noun("Mara")
+    run.lower_words["ferryman"] += 3
+    assert run.common_noun("Ferryman")
+
+
+def test_every_rewrite_starts_from_who_they_were_plus_all_changes(monkeypatch):
+    class Seen(Events):
+        def __call__(self, prompt, system, usable):
+            if prompt.startswith("A spoiler-free character list has this entry:"):
+                self.prompts.append(prompt)
+                return "Tobin Reed (also Tobin): The ferryman, who drowned."
+            return super().__call__(prompt, system, usable)
+    run = X._Records(Ctx(), DOCS, Seen(), "Mara Quill", False)
+    run.known["Tobin Reed"] = dict(aliases=["Tobin"], type="person", first="The old ferryman.",
+                                   change="", narrator=False)
+    run.rewrite("Tobin Reed", "Tobin Reed loses his boat.")
+    run.rewrite("Tobin Reed", "Tobin Reed drowned.")
+    last = run.model_prompts = [p for p in run.ask.prompts if p.startswith("A spoiler-free")][-1]
+    assert "The old ferryman." in last and "loses his boat" in last and "drowned" in last
+    assert run.who("Tobin Reed") == "The ferryman, who drowned."
