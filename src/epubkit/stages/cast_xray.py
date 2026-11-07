@@ -2017,18 +2017,18 @@ GUIDE_SCHEMA = {"type": "object", "properties": {
     "required": ["narrator", "first_person", "system_messages", "you_in_messages",
                  "changes_form", "shared_names"]}
 NAMES_SCHEMA = {"type": "object", "properties": {"new": {
-    "type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
-        "evidence": _str(160), "name": _str(60),
+    "type": "array", "maxItems": 25, "items": {"type": "object", "properties": {
+        "evidence": _str(140), "name": _str(60),
         "type": {"type": "string", "enum": ["person", "creature", "animal", "ai", "god",
                                             "monster", "company", "place", "item", "group",
                                             "kind", "title", "reference"]},
         "one": YESNO, "aliases": {"type": "array", "maxItems": 6, "items": _str(60)},
-        "who": _str(200)},
+        "who": _str(160)},
         "required": ["evidence", "name", "type", "one", "aliases", "who"]}}},
     "required": ["new"]}
 EVENTS_SCHEMA = {"type": "object", "properties": {"events": {
-    "type": "array", "maxItems": 20, "items": {"type": "object", "properties": {
-        "quote": _str(200), "who": _str(80), "also": _str(80), "what": _str(160),
+    "type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
+        "quote": _str(160), "who": _str(80), "also": _str(80), "what": _str(160),
         "happened": YESNO},
         "required": ["quote", "who", "also", "what", "happened"]}}},
     "required": ["events"]}

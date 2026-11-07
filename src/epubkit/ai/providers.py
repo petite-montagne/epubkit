@@ -91,6 +91,13 @@ class OpenAIProvider(Provider):
         if not choices:
             raise AIError("openai returned no choices: %s" % str(data)[:200])
         text = (choices[0].get("message") or {}).get("content", "")
+        if choices[0].get("finish_reason") == "length":
+            # cut off at max_tokens: the end of the answer is missing. Say so
+            # in the logs instead of losing people quietly
+            import logging
+            logging.getLogger("epubkit").warning(
+                "%s answer cut off at max_tokens=%s; raise ai.max_tokens", self.model,
+                self.max_tokens)
         usage = data.get("usage") or {}
         return Completion(text, data.get("model", self.model),
                           usage.get("prompt_tokens"),
