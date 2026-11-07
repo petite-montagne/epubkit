@@ -815,3 +815,45 @@ def test_every_rewrite_starts_from_who_they_were_plus_all_changes(monkeypatch):
     last = run.model_prompts = [p for p in run.ask.prompts if p.startswith("A spoiler-free")][-1]
     assert "The old ferryman." in last and "loses his boat" in last and "drowned" in last
     assert run.who("Tobin Reed") == "The ferryman, who drowned."
+
+
+def test_a_local_server_gets_the_makers_sampling_and_the_answer_shape(monkeypatch):
+    p = OpenAIProvider(model="m", endpoint="http://pc:8081", temperature=0.7, seed=7,
+                       sampling={"top_p": 0.8, "top_k": 20, "min_p": 0, "presence_penalty": -1})
+    sent = {}
+
+    def post(url, payload, headers):
+        sent.update(payload)
+        return {"choices": [{"message": {"content": "{}"}}]}
+    monkeypatch.setattr(p, "_post", post)
+    p.complete("q", system="s", schema=X.EVENTS_SCHEMA)
+    assert sent["top_k"] == 20 and sent["top_p"] == 0.8 and sent["min_p"] == 0
+    assert "presence_penalty" not in sent and sent["seed"] == 7
+    assert sent["response_format"]["json_schema"]["schema"] is X.EVENTS_SCHEMA
+    p.complete("q", system="s")
+    assert sent["top_k"] == 20
+    old = OpenAIProvider(model="m", endpoint="http://pc:8081", temperature=0, seed=7)
+    monkeypatch.setattr(old, "_post", post)
+    sent.clear()
+    old.complete("q")
+    assert sent["top_k"] == 1 and "response_format" not in sent
+
+
+def test_the_ledger_sends_each_answer_shape_quote_and_reason_first(monkeypatch):
+    shapes = []
+
+    class Shaped(Ledger):
+        def __call__(self, prompt, system, usable, schema=None):
+            shapes.append(schema)
+            if schema is not None and "Possible changes for" in prompt:
+                self.prompts.append(prompt)
+                n = len(schema["properties"])
+                return json.dumps({str(i + 1): {"why": "the passage shows it", "answer": "KEEP"}
+                                   for i in range(n)})
+            return super().__call__(prompt, system, usable)
+    monkeypatch.setenv("CAST_LEDGER", "1")
+    rows, report, _s = X.build(Ctx(), DOCS, Shaped(), hero="Mara Quill")
+    assert X.GUIDE_SCHEMA in shapes and X.NAMES_SCHEMA in shapes and X.EVENTS_SCHEMA in shapes
+    assert list(X.EVENTS_SCHEMA["properties"]["events"]["items"]["properties"])[0] == "quote"
+    assert list(X.decide_schema(2)["properties"]["1"]["properties"]) == ["why", "answer"]
+    assert any("Drowns" in e or "drowned" in e for _o, e in entries(rows))

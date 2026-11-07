@@ -46,7 +46,8 @@ class Provider:
     def __init__(self, model: str, endpoint: str, api_key: str | None = None,
                  timeout: int = 180, max_tokens: int = 1024,
                  temperature: float = 0.2, context: int = 0,
-                 keep_alive: str = "", seed: int | None = None):
+                 keep_alive: str = "", seed: int | None = None,
+                 sampling: dict | None = None):
         self.model = model
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
@@ -58,14 +59,22 @@ class Provider:
         #: a fixed seed makes a local model give the same answer to the same
         #: prompt, run after run (with temperature 0 and no reused prompt cache)
         self.seed = seed
+        #: local models only: top_p, top_k, min_p, presence_penalty as the
+        #: model's makers recommend (a value below 0 is left out)
+        self.sampling = {k: v for k, v in (sampling or {}).items()
+                         if v is not None and v >= 0}
 
     # -- public ---------------------------------------------------------
 
     def complete(self, prompt: str, system: str | None = None,
-                 retries: int = 3) -> Completion:
+                 retries: int = 3, schema: dict | None = None) -> Completion:
+        """schema: a JSON schema the answer must follow, for servers that can
+        hold a model to one (llama.cpp, Ollama); others ignore it."""
         last: Exception | None = None
         for attempt in range(retries):
             try:
+                if schema is not None:
+                    return self._call(prompt, system, schema=schema)
                 return self._call(prompt, system)
             except AIUnavailable:
                 raise                       # retrying a missing model is futile
@@ -91,7 +100,7 @@ class Provider:
 
     # -- subclass hook ---------------------------------------------------
 
-    def _call(self, prompt: str, system: str | None) -> Completion:
+    def _call(self, prompt: str, system: str | None, schema: dict | None = None) -> Completion:
         raise NotImplementedError
 
     # -- shared plumbing -------------------------------------------------

@@ -1434,8 +1434,7 @@ class _Run:
                  "item, group, title...).\n") if unl else ""
         self.calls["step"] += 1
         try:
-            rtext = self.ask(self.step_prompt(manifest, text, ctext, utext, unl),
-                             SYSTEM, _usable_step)
+            rtext = self.ask_step(self.step_prompt(manifest, text, ctext, utext, unl))
         except Exception as exc:                             # noqa: BLE001
             self.log.append("part %d: no answer (%s)" % (i + 1, exc))
             return
@@ -1460,6 +1459,9 @@ class _Run:
                 self._join(a, b)
             else:
                 self.never.add(fp)
+
+    def ask_step(self, prompt):
+        return self.ask(prompt, SYSTEM, _usable_step)
 
     def step_prompt(self, manifest, text, ctext, utext, unl):
         return STEP.format(known=manifest, text=text, check=ctext, unlisted=utext,
@@ -1927,8 +1929,8 @@ class _Records(_Run):
 #      KEEP or DROP each change, seeing what came after it; then the kept
 #      ones are written in book order, each entry from earlier facts only.
 
-STEP_NAMES = STEP.split("Return JSON only")[0] + """Return JSON only, in this shape:
-{{"new": [{{"name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "...", "evidence": "..."}}]}}
+STEP_NAMES = STEP.split("Return JSON only")[0] + """Return JSON only, in this shape (the quote that names them first):
+{{"new": [{{"evidence": "...", "name": "...", "type": "...", "one": "yes or no", "aliases": ["..."], "who": "..."}}]}}
 
 """ + STEP.split("Return JSON only")[1].split("\n\n", 1)[1].split("Rules for \"updates\"")[0].rstrip()
 
@@ -1948,20 +1950,20 @@ Answer about how this book is told, from the text above only. Return JSON only, 
 
 EXAMPLES = """EXAMPLE 1
 TEXT: Notice: Crawler Vex has been granted the class Ember Monk. A goblin chieftain, also called Vex, laughed at him before Bruno crushed it. Vex was knocked flat but stood up a minute later.
-ANSWER: {"events": [{"who": "Vex", "also": "", "what": "Vex takes the class Ember Monk.", "happened": "yes", "quote": "Crawler Vex has been granted the class Ember Monk"},
- {"who": "Vex (the goblin chieftain)", "also": "", "what": "A goblin chieftain who shares Vex's name is killed by Bruno.", "happened": "yes", "quote": "A goblin chieftain, also called Vex"}]}
+ANSWER: {"events": [{"quote": "Crawler Vex has been granted the class Ember Monk", "who": "Vex", "also": "", "what": "Vex takes the class Ember Monk.", "happened": "yes"},
+ {"quote": "A goblin chieftain, also called Vex", "who": "Vex (the goblin chieftain)", "also": "", "what": "A goblin chieftain who shares Vex's name is killed by Bruno.", "happened": "yes"}]}
 (Being knocked flat is a moment, not an event. The goblin only shares a name, so its kind goes in brackets.)
 
 EXAMPLE 2
 TEXT: Everyone in the village said the miller had poisoned his wife. Inspector Dray proved it was the miller's brother, Aldo, and arrested him that night. The headmistress named Hollis captain of the Ravens.
-ANSWER: {"events": [{"who": "Aldo", "also": "", "what": "Aldo is shown to be the poisoner and is arrested.", "happened": "yes", "quote": "proved it was the miller's brother, Aldo, and arrested him"},
- {"who": "Hollis", "also": "", "what": "Hollis becomes captain of the Ravens.", "happened": "yes", "quote": "named Hollis captain of the Ravens"}]}
+ANSWER: {"events": [{"quote": "proved it was the miller's brother, Aldo, and arrested him", "who": "Aldo", "also": "", "what": "Aldo is shown to be the poisoner and is arrested.", "happened": "yes"},
+ {"quote": "named Hollis captain of the Ravens", "who": "Hollis", "also": "", "what": "Hollis becomes captain of the Ravens.", "happened": "yes"}]}
 (What the village said about the miller is a rumour, not an event.)
 
 EXAMPLE 3
 TEXT: The old queen fell beneath the knight's blade. Sir Tamsin had slain Queen Orla, and the crown passed to her daughter, Brin. Brin swore she would one day take back the eastern hills.
-ANSWER: {"events": [{"who": "Sir Tamsin", "also": "Queen Orla", "what": "Sir Tamsin kills Queen Orla.", "happened": "yes", "quote": "Sir Tamsin had slain Queen Orla"},
- {"who": "Brin", "also": "", "what": "Brin becomes queen after her mother's death.", "happened": "yes", "quote": "the crown passed to her daughter, Brin"}]}
+ANSWER: {"events": [{"quote": "Sir Tamsin had slain Queen Orla", "who": "Sir Tamsin", "also": "Queen Orla", "what": "Sir Tamsin kills Queen Orla.", "happened": "yes"},
+ {"quote": "the crown passed to her daughter, Brin", "who": "Brin", "also": "", "what": "Brin becomes queen after her mother's death.", "happened": "yes"}]}
 (Queen Orla is changed too, so she is "also". Brin's oath is a plan, not an event.)"""
 
 EVENTS = """{about}NEW TEXT:
@@ -1980,8 +1982,9 @@ If nothing lasting happens, answer {{"events": []}}.
 
 {examples}
 
+First find the exact words that show each change, then say whom it happened to.
 Return JSON only, in this shape:
-{{"events": [{{"who": "...", "also": "...", "what": "...", "happened": "yes or no", "quote": "..."}}]}}"""
+{{"events": [{{"quote": "...", "who": "...", "also": "...", "what": "...", "happened": "yes or no"}}]}}"""
 
 DECIDE = """{about}A spoiler-free character list has this entry for {name} from before these pages:
 {entry}
@@ -1991,9 +1994,52 @@ Possible changes for {name}, in the order the book tells them, each with its pas
 
 For each one, answer KEEP if the passage shows it happening to {name} and it lasts: their life or death, body or form, name, title, role, job, rank, class, side or faith, a bond begun or ended, or a reveal of who they are. It counts even when someone else does it to {name} (kills, transforms, marks, curses, hires or marries them).
 Answer DROP only if it is about another individual (even one with the same name), or only a moment, a plan, a rumour, an item, or something that wears off, or a later item plainly undoes it.
-Return JSON only, one answer per number, like {{"1": "KEEP", "2": "DROP"}}."""
+For each number, first give a short reason (under 20 words) from the passage, then the answer.
+Return JSON only, one entry per number, like {{"1": {{"why": "...", "answer": "KEEP"}}, "2": {{"why": "...", "answer": "DROP"}}}}."""
 
 COVER_MIN, COVER_MAX, DECIDE_BATCH = 12, 80, 8
+
+# The answer shapes, sent to servers that can hold the model to them
+# (llama.cpp turns a schema into a grammar): always well-formed JSON, yes/no
+# and KEEP/DROP as fixed choices, and the fields in the order the model
+# should think in - the quote before the claim, the reason before the
+# verdict. Strings are bounded so an answer cannot run on.
+
+
+def _str(n):
+    return {"type": "string", "maxLength": n}
+
+
+YESNO = {"type": "string", "enum": ["yes", "no"]}
+GUIDE_SCHEMA = {"type": "object", "properties": {
+    "narrator": _str(60), "first_person": YESNO, "system_messages": YESNO,
+    "you_in_messages": _str(60), "changes_form": YESNO, "shared_names": YESNO},
+    "required": ["narrator", "first_person", "system_messages", "you_in_messages",
+                 "changes_form", "shared_names"]}
+NAMES_SCHEMA = {"type": "object", "properties": {"new": {
+    "type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
+        "evidence": _str(160), "name": _str(60),
+        "type": {"type": "string", "enum": ["person", "creature", "animal", "ai", "god",
+                                            "monster", "company", "place", "item", "group",
+                                            "kind", "title", "reference"]},
+        "one": YESNO, "aliases": {"type": "array", "maxItems": 6, "items": _str(60)},
+        "who": _str(200)},
+        "required": ["evidence", "name", "type", "one", "aliases", "who"]}}},
+    "required": ["new"]}
+EVENTS_SCHEMA = {"type": "object", "properties": {"events": {
+    "type": "array", "maxItems": 20, "items": {"type": "object", "properties": {
+        "quote": _str(200), "who": _str(80), "also": _str(80), "what": _str(160),
+        "happened": YESNO},
+        "required": ["quote", "who", "also", "what", "happened"]}}},
+    "required": ["events"]}
+
+
+def decide_schema(n):
+    one = {"type": "object", "properties": {
+        "why": _str(140), "answer": {"type": "string", "enum": ["KEEP", "DROP"]}},
+        "required": ["why", "answer"]}
+    return {"type": "object", "properties": {str(i + 1): one for i in range(n)},
+            "required": [str(i + 1) for i in range(n)]}
 
 
 def _usable_events(t: str) -> bool:
@@ -2002,6 +2048,13 @@ def _usable_events(t: str) -> bool:
 
 class _Ledger(_Records):
     """recaps.cast_ledger: see the notes above EXAMPLES."""
+
+    def ask_json(self, prompt, usable, schema):
+        """Ask with the answer's shape when the model call takes one."""
+        try:
+            return self.ask(prompt, SYSTEM, usable, schema=schema)
+        except TypeError:
+            return self.ask(prompt, SYSTEM, usable)
 
     def go(self):
         ctx = self.ctx
@@ -2029,7 +2082,8 @@ class _Ledger(_Records):
                 break
         self.calls["guide"] += 1
         try:
-            got = parse(self.ask(GUIDE.format(text=opening[:PASSAGE + 4000]), SYSTEM, _usable_step))
+            got = parse(self.ask_json(GUIDE.format(text=opening[:PASSAGE + 4000]), _usable_step,
+                                      GUIDE_SCHEMA))
         except Exception:                                    # noqa: BLE001
             got = {}
 
@@ -2059,6 +2113,9 @@ class _Ledger(_Records):
 
     # -- 2. names, then events -------------------------------------------
 
+    def ask_step(self, prompt):
+        return self.ask_json(prompt, _usable_step, NAMES_SCHEMA)
+
     def step_prompt(self, manifest, text, ctext, utext, unl):
         return self.about + STEP_NAMES.format(
             known=manifest, text=text, check="\n", unlisted=utext,
@@ -2067,8 +2124,8 @@ class _Ledger(_Records):
     def events_for(self, text, only=""):
         self.calls["events"] += 1
         try:
-            got = parse(self.ask(EVENTS.format(about=self.about, text=text, examples=EXAMPLES,
-                                               only=only), SYSTEM, _usable_events))
+            got = parse(self.ask_json(EVENTS.format(about=self.about, text=text, examples=EXAMPLES,
+                                                    only=only), _usable_events, EVENTS_SCHEMA))
         except Exception:                                    # noqa: BLE001
             return []
         # whether it lasts is decided at the end of the book, not here
@@ -2129,13 +2186,18 @@ class _Ledger(_Records):
                                   for n, c in enumerate(batch))
                 self.calls["decide"] += 1
                 try:
-                    got = parse(self.ask(DECIDE.format(about=self.about, name=k,
-                                                       entry=self.entry(k), items=items),
-                                         SYSTEM, _usable_events))
+                    got = parse(self.ask_json(DECIDE.format(about=self.about, name=k,
+                                                            entry=HEADER.sub("", self.who(k)),
+                                                            items=items),
+                                              _usable_events, decide_schema(len(batch))))
                 except Exception:                            # noqa: BLE001
                     got = {}
                 for n, c in enumerate(batch):
-                    a = str(got.get(str(n + 1)) or "").strip().upper()
+                    a = got.get(str(n + 1)) or ""
+                    if isinstance(a, dict):
+                        self.log.append("decide why %s | %s" % (k, a.get("why", "")))
+                        a = a.get("answer") or ""
+                    a = str(a).strip().upper()
                     verdict[id(c)] = a.startswith("KEEP")
                     self.log.append("decide %s | %s -> %s" % (k, c["what"], a or "no answer"))
             for c in cs:

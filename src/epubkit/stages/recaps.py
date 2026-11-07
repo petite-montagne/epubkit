@@ -628,8 +628,8 @@ class RecapStage(Stage):
             else:
                 from . import cast as book
 
-            def ask(prompt, system, usable):
-                return answers.ask(ctx.provider, prompt, system, usable=usable)
+            def ask(prompt, system, usable, schema=None):
+                return answers.ask(ctx.provider, prompt, system, usable=usable, schema=schema)
             people, report, seen = book.build(
                 ctx, docs, ask, hero=hero, first_person=first_person, lang=lang,
                 view=view, title=_book_title(ctx.path),
@@ -1258,7 +1258,7 @@ class _Answers:
         m = re.search(r"<<<(.*?)>>>", prompt, re.S)
         return self._key("loose\0" + m.group(1), system) if m else ""
 
-    def ask(self, provider, prompt: str, system: str, usable=None) -> str:
+    def ask(self, provider, prompt: str, system: str, usable=None, schema=None) -> str:
         key = self._key(prompt, system)
         loose = self._loose(prompt, system)
         if key in self.got:
@@ -1270,7 +1270,9 @@ class _Answers:
             self.missed += 1
             if self.replay_only:
                 return ""
-        text = self._taped(key, provider.complete(prompt, system=system).text, loose)
+        text = self._taped(key, (provider.complete(prompt, system=system, schema=schema)
+                                 if schema is not None else
+                                 provider.complete(prompt, system=system)).text, loose)
         if self.enabled and (usable is None or usable(text)):
             with self.lock:
                 self.got[key] = text

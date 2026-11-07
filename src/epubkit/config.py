@@ -80,6 +80,15 @@ class AIConfig:
     #: cache) so the same book gives the same answers every run. -1 leaves
     #: the server's own sampling.
     seed: int = -1
+    #: local models only: the sampling the model's makers recommend. Qwen3.6
+    #: without thinking: temperature 0.7, top_p 0.8, top_k 20, min_p 0, and
+    #: "do not use greedy decoding" (temperature 0 / top-k 1 can degrade it
+    #: and make it repeat). A value below 0 is left to the server (top_k
+    #: then stays 1 with a seed, as before)
+    top_p: float = -1
+    top_k: int = -1
+    min_p: float = -1
+    presence_penalty: float = -1
 
     def resolved_model(self) -> str:
         return self.model or DEFAULT_MODEL.get(self.provider, "")

@@ -27,7 +27,7 @@ class AnthropicProvider(Provider):
     name = "anthropic"
     API_VERSION = "2023-06-01"
 
-    def _call(self, prompt, system):
+    def _call(self, prompt, system, schema=None):
         payload = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -53,7 +53,7 @@ class OpenAIProvider(Provider):
 
     name = "openai"
 
-    def _call(self, prompt, system):
+    def _call(self, prompt, system, schema=None):
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
         payload = {
@@ -70,8 +70,16 @@ class OpenAIProvider(Provider):
                 # llama.cpp: the same prompt gets the same answer. A reused
                 # prompt cache and batching shift the numbers enough to change
                 # words at temperature 0 (Nov 2026: two runs of one book
-                # disagreed until these were set).
+                # disagreed until these were set). With the maker's sampling
+                # set (Qwen: never greedy), the fixed seed alone repeats it.
                 payload.update(seed=self.seed, top_k=1, cache_prompt=False)
+            payload.update(self.sampling)
+            if schema is not None:
+                # llama-server turns the schema into a grammar: the answer
+                # is always well-formed JSON with the fields in this order
+                payload["response_format"] = {"type": "json_schema",
+                                              "json_schema": {"name": "answer",
+                                                              "schema": schema}}
         headers = {}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
@@ -99,12 +107,13 @@ class OllamaProvider(Provider):
     #: the rest of the run rather than failing the book.
     send_think_flag = True
 
-    def _call(self, prompt, system):
+    def _call(self, prompt, system, schema=None):
         options = {"temperature": self.temperature, "num_predict": self.max_tokens}
         if self.context:
             options["num_ctx"] = self.context
         if self.seed is not None and self.seed >= 0:
             options.update(seed=self.seed, top_k=1)
+        options.update(self.sampling)
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -117,6 +126,8 @@ class OllamaProvider(Provider):
             payload["system"] = system
         if self.send_think_flag:
             payload["think"] = False
+        if schema is not None:
+            payload["format"] = schema
 
         data = self._post(self.endpoint + "/api/generate", payload, {})
         if "error" in data:
@@ -173,4 +184,6 @@ def build(ai_config) -> Provider:
         context=getattr(ai_config, "context", 0),
         keep_alive=getattr(ai_config, "keep_alive", ""),
         seed=getattr(ai_config, "seed", None),
+        sampling={k: getattr(ai_config, k, -1)
+                  for k in ("top_p", "top_k", "min_p", "presence_penalty")},
     )
