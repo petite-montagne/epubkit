@@ -51,7 +51,9 @@ import zipfile
 from pathlib import Path
 
 HOME = Path.home()
-BACKUPS = HOME / "recap-backups"
+# GRECAPS_HOME: a separate folder for a trial run (its own lock, settings,
+# state and backups), so it can go while the main run is paused
+BACKUPS = Path(os.environ.get("GRECAPS_HOME") or HOME / "recap-backups").expanduser()
 STATE = BACKUPS / "grimmory-recaps.json"
 LOG = BACKUPS / "log.tsv"
 CONFIG = BACKUPS / "epubkit-recaps.toml"
@@ -291,16 +293,33 @@ def check_ollama(endpoint: str, model: str) -> None:
         die("Ollama has no model %r. It has: %s" % (model, ", ".join(sorted(have))))
 
 
+def run_seed(args) -> int:
+    """--seed, or 7 for the xray who's who so the same book gives the same
+    list every run; -1 leaves the server's own sampling."""
+    seed = getattr(args, "seed", None)
+    if seed is None:
+        seed = 7 if getattr(args, "cast_method", "") == "xray" else -1
+    return seed
+
+
 def write_config(args) -> Path:
     BACKUPS.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(
         "# written by grimmory_recaps.py; edit the command line, not this file\n"
         "[ai]\nprovider = \"%s\"\nmodel = \"%s\"\nendpoint = \"%s\"\n"
-        "timeout = 300\nmax_tokens = 1500\nconcurrency = %d\n\n"
+        "timeout = 300\nmax_tokens = 1500\nconcurrency = %d\nseed = %d\n\n"
         "[recaps]\nenabled = true\npassage_words = %d\ncast = true\n"
         "main_character = %s\n"
-        % (args.provider, args.model, args.endpoint, args.concurrency, args.passage_words,
-           json.dumps(args.main_character or "")))
+        "cast_only = %s\nkeep_recaps = %s\n"
+        "cast_method = %s\ncast_report_dir = %s\nseries_dir = %s\n"
+        % (args.provider, args.model, args.endpoint, args.concurrency, run_seed(args),
+           args.passage_words,
+           json.dumps(args.main_character or ""),
+           "true" if getattr(args, "characters_only", False) else "false",
+           "true" if getattr(args, "keep_recaps", False) else "false",
+           json.dumps(getattr(args, "cast_method", "") or "passages"),
+           json.dumps(getattr(args, "cast_report", "") or ""),
+           json.dumps(getattr(args, "series_dir", "") or "")))
     return CONFIG
 
 
@@ -320,9 +339,13 @@ def cmd_run(args) -> int:
         if not books:
             die("No book's filename contains %r." % args.only)
 
+    if args.characters_only or args.keep_recaps:
+        args.force = True
     todo = []
     for root, b in books:
         a = R.audit(b)
+        if args.characters_only and a["kind"] != "passages":
+            continue                         # nothing to keep, so nothing to do
         if a["kind"] == "passages" and not args.force and not a.get("lead_off") \
                 and not a.get("lang_off") and (
                 a["format"] >= R.FORMAT or args.keep_older_passages):
@@ -339,6 +362,9 @@ def cmd_run(args) -> int:
             log(b, "skipped", "not a readable zip")
             continue
         todo.append((root, b))
+    # a series in order: each book is written with what the books before it
+    # put in the series memory
+    todo = R.reading_order(todo)
     if args.limit:
         todo = todo[:args.limit]
     say("%d books in the library, %d to do%s." % (
@@ -393,6 +419,10 @@ def cmd_run(args) -> int:
                "recaps", "-c", str(cfg), str(book)]
         if args.force:
             cmd.append("--force")
+        # the Workshop's progress and pause/skip files, passed through to each book
+        for flag, path in (("--status", args.status), ("--control", args.control)):
+            if path:
+                cmd += [flag, path]
         rc = subprocess.call(cmd)
         after = sha(book)
         a = R.audit(book)
@@ -683,9 +713,32 @@ def main(argv=None) -> int:
     r.add_argument("--only", help="only books whose filename contains this")
     r.add_argument("--limit", type=int, default=0, help="stop after this many books")
     r.add_argument("--force", action="store_true", help="redo books already current")
+    r.add_argument("--characters-only", action="store_true",
+                   help="keep each book's recap text and redo only the who's who; "
+                        "books without recaps are skipped (implies --force)")
+    r.add_argument("--keep-recaps", action="store_true",
+                   help="like --characters-only for books that have recaps; books "
+                        "without them get recaps in full (implies --force)")
+    r.add_argument("--cast-method", choices=("passages", "book", "facts", "xray"), default="passages",
+                   help="book: write the who's who from the whole book (names from "
+                        "the text, one checked entry per person); xray: chapter by "
+                        "chapter, every change backed by a quote from the book; with "
+                        "--characters-only the passages are not read again")
+    r.add_argument("--seed", type=int, default=None,
+                   help="fixed sampling seed for a local model (default: 7 with "
+                        "--cast-method xray, otherwise none)")
+    r.add_argument("--cast-report", default="",
+                   help="with --cast-method book, write <book>.cast.txt into this "
+                        "folder: what was found, set aside and written")
+    r.add_argument("--series-dir", default="",
+                   help="keep series memory files here instead of the usual place, "
+                        "so a trial run on copies leaves the real ones alone")
     r.add_argument("--keep-older-passages", action="store_true",
                    help="leave books that already have passage recaps in an older "
                         "layout alone instead of redoing them")
+    r.add_argument("--status", default="", help="write progress to this JSON file (Workshop)")
+    r.add_argument("--control", default="",
+                   help="read pause/stop/skip from this JSON file (Workshop)")
     r.add_argument("--dry-run", action="store_true", help="list what would be done")
     r.add_argument("--provider", choices=["openai", "ollama"], default=DEFAULT_PROVIDER)
     r.add_argument("--model", default=DEFAULT_MODEL)

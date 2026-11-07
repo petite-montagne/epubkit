@@ -53,6 +53,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from .. import series_memory
 from .base import Context, Stage, StageResult
 
 RECAP_DIR = "recaps"
@@ -63,8 +64,9 @@ FLOOR_CHARS = 300
 
 SYSTEM = (
     "You write spoiler-safe recaps and character lists for readers of a novel. "
-    "You use only what the given passage states, you never draw on other "
-    "knowledge of the book, and you never say what anyone turns out to be."
+    "You use only what the given passage and the reader's notes state, you "
+    "never draw on other knowledge of the book or its series, and you never "
+    "say what anyone turns out to be."
 )
 
 HERO_PROMPT = """Below are extracts from across a whole book. Who is its main character?
@@ -80,11 +82,11 @@ name exactly as written above, and nothing else. If the story is told by an
 """
 
 PROMPT = """The reader has read this book up to the END of the passage below, and nothing after it.
-The main character of the whole book is {hero}, including in passages where
-{hero} does not appear. Nobody else is ever "the main character".
-
+{lead}{pov}
 Rules:
-- Use ONLY what this passage states. If you happen to know this book, ignore that.
+- Use ONLY what this passage states, plus the reader's notes above it (what
+  the reader has learned in earlier books and earlier in this book). If
+  you happen to know this book or series, ignore that.
 - Never say what becomes of anyone: no deaths, betrayals, reveals or fates
   beyond what the passage itself shows.
 - Write in the same language as the passage. Plain text, no markdown.
@@ -95,31 +97,28 @@ SUMMARY: <2-4 sentences, past tense, what happened in this passage, ending
 with the situation at its final lines - who is there and what is about to
 happen - so a reader knows exactly where they left off.>
 PEOPLE:
-<Name> | <met or heard> | <how the passage first introduces them> | <their relationship to {hero} and their role>
+<Name> | <met or heard> | <how the passage first introduces them> | {fourth}
 
 PEOPLE must list EVERY individual the passage names or refers to, not only
 those on the page. Include people who are only mentioned in passing, talked
 about, remembered, written to or about, or described in a story, rumour,
 legend or piece of history that someone tells - including the dead and the
-absent. Leave out groups, species, places, organisations and objects.
+absent. Leave out groups, species, places, organisations and objects,
+and ships, boats and other vessels, even when they have names.
 - Name: as the text calls them. A title used as a name counts ("The Duke").
 - met: they are physically present or speak in this passage. heard: only
   talked about, remembered, or named - including anyone dead or far away.
 - The third field is how they are first presented, before anything later in
   the passage adds to it. 4 to 12 words.
 - The fourth field says who this person IS, not what they did in one scene.
-  State a connection to {hero} ONLY if this passage itself shows or says it.
-  Never infer family ties or relationships from anything outside the
-  passage; if the passage does not connect them to {hero}, begin with
-  "not yet connected to {hero}" and then give their role. Otherwise:
-  their relationship to {hero} (family, friend, enemy, teacher, stranger,
-  someone {hero} has only heard of...) and their role (a teacher, a
-  government minister, a servant...), as of the end of this passage.
-  4 to 14 words. Examples: "Harry's best friend, a fellow student";
-  "not yet connected to Wren; the town's magistrate".
-  For {hero} themself write: the main character. For anyone not yet
-  connected to {hero}, say so plainly ("not yet connected to {hero}").
-
+{tie}  If the reader's notes already describe this person, START from that
+  description and add what this passage changes. Never write a vaguer or
+  shorter description than the notes give, and never describe someone only
+  by what they did in this scene. Wrong: "clutching a potion, staring at
+  Carl"; "a person who suggested opening the door". Right: "Frank's
+  partner, a crawler who ambushed Carl"; "a fellow crawler in Carl's group,
+  a retired teacher".
+{tie_end}
 {before}Passage:
 {text}
 """
@@ -141,7 +140,8 @@ SYSTEM_FR = (
     "Vous rédigez des résumés sans divulgâchage et des listes de personnages "
     "pour les lecteurs d'un roman. Vous n'utilisez que ce que dit le passage "
     "fourni, vous ne puisez jamais dans d'autres connaissances du livre, et "
-    "vous ne dites jamais ce que quelqu'un s'avère être. Vous écrivez "
+    "vous ne dites jamais ce que quelqu'un s'avère être. Vous pouvez aussi "
+    "utiliser les notes du lecteur fournies avec le passage. Vous écrivez "
     "toujours en français."
 )
 
@@ -159,11 +159,11 @@ nom n'est pas dans la liste, répondez : le narrateur
 """
 
 PROMPT_FR = """Le lecteur a lu ce livre jusqu'à la FIN du passage ci-dessous, et rien au-delà.
-Le personnage principal de tout le livre est {hero}, y compris dans les passages
-où {hero} n'apparaît pas. Personne d'autre n'est jamais « le personnage principal ».
-
+{lead}{pov}
 Règles :
-- N'utilisez QUE ce que dit ce passage. Si vous connaissez ce livre, n'en tenez pas compte.
+- N'utilisez QUE ce que dit ce passage, plus les notes du lecteur placées
+  avant lui (ce que le lecteur sait déjà des livres précédents et du début de
+  ce livre). Si vous connaissez ce livre ou cette série, n'en tenez pas compte.
 - Ne dites jamais ce que devient quelqu'un : aucune mort, trahison, révélation
   ou destinée au-delà de ce que montre le passage lui-même.
 - Écrivez tout en français, y compris les descriptions des personnages.
@@ -176,14 +176,15 @@ RÉSUMÉ : <2 à 4 phrases au passé : ce qui s'est passé dans ce passage, en
 terminant par la situation à ses dernières lignes - qui est là et ce qui va
 arriver - pour que le lecteur sache exactement où il s'est arrêté.>
 PERSONNAGES :
-<Nom> | <rencontré ou évoqué> | <comment le passage le présente d'abord> | <son lien avec {hero} et son rôle>
+<Nom> | <rencontré ou évoqué> | <comment le passage le présente d'abord> | {fourth}
 
 PERSONNAGES doit lister CHAQUE individu que le passage nomme ou évoque, pas
 seulement ceux qui sont présents. Incluez les personnes seulement mentionnées
 en passant, dont on parle, dont on se souvient, à qui ou sur qui l'on écrit, ou
 qui figurent dans une histoire, une rumeur, une légende ou un récit historique
 que quelqu'un raconte - y compris les morts et les absents. Laissez de côté les
-groupes, les espèces, les lieux, les organisations et les objets.
+groupes, les espèces, les lieux, les organisations et les objets, ainsi que
+les navires, bateaux et autres vaisseaux, même quand ils ont un nom.
 - Nom : tel que le texte l'appelle. Un titre employé comme nom compte (« Le Duc »).
 - rencontré : la personne est physiquement présente ou parle dans ce passage.
   évoqué : on en parle seulement, on s'en souvient ou on la nomme - y compris
@@ -191,17 +192,14 @@ groupes, les espèces, les lieux, les organisations et les objets.
 - Le troisième champ dit comment la personne est présentée la première fois,
   avant que la suite du passage n'y ajoute quoi que ce soit. De 4 à 12 mots.
 - Le quatrième champ dit qui EST cette personne, pas ce qu'elle a fait dans
-  une scène. N'indiquez un lien avec {hero} QUE si ce passage le montre ou le
-  dit lui-même. Ne déduisez jamais de liens familiaux ou de relations de quoi
-  que ce soit hors du passage ; si le passage ne la relie pas à {hero},
-  commencez par « pas encore lié à {hero} » puis donnez son rôle. Sinon :
-  son lien avec {hero} (famille, ami, ennemi, professeur, inconnu, quelqu'un
-  dont {hero} a seulement entendu parler...) et son rôle (un professeur, une
-  ministre, un domestique...), tels qu'à la fin de ce passage. De 4 à 14 mots.
-  Exemples : « meilleur ami de Harry, un camarade d'école » ;
-  « pas encore lié à Wren ; le magistrat de la ville ».
-  Pour {hero} lui-même, écrivez : le personnage principal.
-
+  une scène.
+{tie}  Si les notes du lecteur décrivent déjà cette personne, PARTEZ de cette
+  description et ajoutez ce que ce passage change. N'écrivez jamais une
+  description plus vague ou plus courte que celle des notes, et ne décrivez
+  jamais quelqu'un seulement par ce qu'il a fait dans cette scène. Faux :
+  « serrant une potion, fixant Carl ». Juste : « la compagne de Frank, une
+  candidate qui a tendu une embuscade à Carl ».
+{tie_end}
 {before}Passage :
 {text}
 """
@@ -210,6 +208,74 @@ BEFORE_FR = """Juste avant ce passage (pour le contexte seulement - ne le résum
 et ne listez personne qui s'y trouve sans être aussi dans le passage) :
 {text}
 
+"""
+
+# The parts of PROMPT that hang on a main character. A book that follows
+# several people in turn has none: A Clash of Kings came out with half its
+# 867 people "not yet connected to Eddard", who is dead before it starts,
+# because the series kept the lead its first book had.
+LEAD = """The main character of the whole book is {hero}, including in passages where
+{hero} does not appear. Nobody else is ever "the main character".
+"""
+FOURTH = "<their relationship to {hero} and their role>"
+TIE = """  State a connection to {hero} ONLY if this passage or the reader's notes
+  show or say it. Never infer family ties or relationships from anything
+  else; if neither connects them to {hero}, begin with
+  "not yet connected to {hero}" and then give their role. Otherwise:
+  their relationship to {hero} (family, friend, enemy, teacher, stranger,
+  someone {hero} has only heard of...), then what they are (a teacher, a
+  government minister, a servant, a cat, an alien showrunner...) and, if
+  there is room, the one thing that sets them apart, as of the end of this
+  passage. 6 to 20 words. Examples: "Harry's best friend, a fellow student
+  from a big poor family"; "not yet connected to Wren; the town's magistrate".
+"""
+TIE_END = """  For {hero} themself write: the main character. For anyone not yet
+  connected to {hero}, say so plainly ("not yet connected to {hero}").
+"""
+ENSEMBLE_LEAD = """This book follows several main characters in turn. Nobody is "the main
+character", and nobody is described by their tie to one hero.
+"""
+ENSEMBLE_FOURTH = "<who they are and their role>"
+ENSEMBLE_TIE = """  Say what they are (a soldier, a lord's steward, a servant, a queen, a
+  teacher, a cat...) and their most important tie to another named person,
+  if this passage or the reader's notes show one (family, sworn to, ally,
+  enemy, servant of...), then, if there is room, the one thing that sets
+  them apart, as of the end of this passage. Never infer family ties or
+  relationships from anything else. 6 to 20 words. Examples: "Harry's best
+  friend, a fellow student from a big poor family"; "the town's magistrate,
+  Wren's uncle".
+"""
+
+LEAD_FR = """Le personnage principal de tout le livre est {hero}, y compris dans les passages
+où {hero} n'apparaît pas. Personne d'autre n'est jamais « le personnage principal ».
+"""
+FOURTH_FR = "<son lien avec {hero} et son rôle>"
+TIE_FR = """  N'indiquez un lien avec {hero} QUE si ce passage ou les notes du
+  lecteur le montrent ou le disent. Ne déduisez jamais de liens familiaux ou
+  de relations d'autre chose ; si rien ne la relie à {hero},
+  commencez par « pas encore lié à {hero} » puis donnez son rôle. Sinon :
+  son lien avec {hero} (famille, ami, ennemi, professeur, inconnu, quelqu'un
+  dont {hero} a seulement entendu parler...), puis ce qu'elle est (un
+  professeur, une ministre, un domestique, un chat...) et, s'il reste de la
+  place, ce qui la distingue, tels qu'à la fin de ce passage. De 6 à 20 mots.
+  Exemples : « meilleur ami de Harry, un camarade d'école d'une grande famille
+  pauvre » ; « pas encore lié à Wren ; le magistrat de la ville ».
+"""
+TIE_END_FR = """  Pour {hero} lui-même, écrivez : le personnage principal.
+"""
+ENSEMBLE_LEAD_FR = """Ce livre suit tour à tour plusieurs personnages principaux. Personne n'est
+« le personnage principal », et personne n'est décrit par son lien avec un seul héros.
+"""
+ENSEMBLE_FOURTH_FR = "<qui est cette personne et son rôle>"
+ENSEMBLE_TIE_FR = """  Dites ce qu'elle est (un soldat, l'intendant d'un seigneur, un domestique,
+  une reine, un professeur, un chat...) et son lien le plus important avec
+  une autre personne nommée, si ce passage ou les notes du lecteur en
+  montrent un (famille, vassal de, allié, ennemi, au service de...), puis,
+  s'il reste de la place, ce qui la distingue, tels qu'à la fin de ce
+  passage. Ne déduisez jamais de liens familiaux ou de relations d'autre
+  chose. De 6 à 20 mots. Exemples : « meilleur ami de Harry, un camarade
+  d'école d'une grande famille pauvre » ; « le magistrat de la ville, oncle
+  de Wren ».
 """
 
 LEAN = """
@@ -238,16 +304,140 @@ Ceci remplace « chaque individu » ci-dessus : dans PERSONNAGES, listez SEULEME
 Laissez de côté tous les autres, même si le passage les nomme.
 """
 
+# The reader's notes: what they know before this passage, from the series
+# memory (earlier books) and from this book's earlier passages. Without them
+# each passage was a scene with no story around it, and a series' regulars
+# were strangers again in every book.
+NOTES = """Reader's notes - what the reader has learned before this passage.
+Use them to know who people are; do not summarise them.
+{notes}
+
+"""
+
+NOTES_FR = """Notes du lecteur - ce que le lecteur sait déjà avant ce passage.
+Servez-vous-en pour savoir qui sont les gens ; ne les résumez pas.
+{notes}
+
+"""
+
+POV = """{hero} tells this story as "I": every "I", "me" and "my" in the narration
+is {hero}, so a scene with "I" in it is a scene with {hero} in it.
+"""
+
+POV_FR = """{hero} raconte cette histoire à la première personne : chaque « je »,
+« me » et « mon » de la narration est {hero}, donc une scène avec « je » est une
+scène avec {hero}.
+"""
+
+# After a book: what goes into the series memory for the next one. These see
+# only this book's own recaps, so nothing leaks backwards or forwards.
+STORY_PROMPT = """Below are recaps of {what}, in order. Write what happened in
+about {words} words, as a plain paragraph in the past tense, naming who did
+what. Keep the events that matter later: who joined or left {hero}, who died,
+what changed. Use only these recaps.
+
+{text}
+"""
+
+STORY_PROMPT_FR = """Voici, dans l'ordre, des résumés de {what}. Racontez ce qui
+s'est passé en {words} mots environ, en un seul paragraphe au passé, en disant
+qui a fait quoi. Gardez ce qui compte pour la suite : qui a rejoint ou quitté
+{hero}, qui est mort, ce qui a changé. N'utilisez que ces résumés.
+
+{text}
+"""
+
+WHO_PROMPT = """Here is how one character, {name}, was described at points
+through a book whose main character is {hero}, earliest first:
+{lines}
+
+In one line of 6 to 18 words, say who {name} is to {hero} and what they are
+(their species, job or title), as of the END of the book. Use only the lines
+above. Some lines name other people: a species, job or title that a line
+gives to someone else is not {name}'s. Where lines disagree about what
+{name} is, go with what most of them say. Say what lasts - who they are,
+what they are, where they stand with {hero} now - not one event ("who
+survives the initial attack"), which the next book's reader no longer
+needs. Answer with the line only.
+"""
+
+WHO_PROMPT_FR = """Voici comment un personnage, {name}, a été décrit au fil d'un
+livre dont le personnage principal est {hero}, du plus ancien au plus récent :
+{lines}
+
+En une ligne de 6 à 18 mots, dites qui est {name} pour {hero} et ce qu'il ou
+elle est (espèce, métier ou titre), à la FIN du livre. N'utilisez que les
+lignes ci-dessus. Certaines lignes nomment d'autres personnes : une espèce, un
+métier ou un titre qu'une ligne donne à quelqu'un d'autre n'est pas celui de
+{name}. Si les lignes se contredisent, suivez la majorité. Dites ce qui
+dure - qui elle est, ce qu'elle est, où elle en est avec {hero} - et non un
+seul événement. Répondez par la ligne seule.
+"""
+
+WHO_ENSEMBLE = """Here is how one character, {name}, was described at points
+through a book, earliest first:
+{lines}
+
+In one line of 6 to 18 words, say what {name} is (their species, job or
+title) and their most important tie to another named person, as of the END
+of the book. Use only the lines above. Some lines name other people: a
+species, job or title that a line gives to someone else is not {name}'s.
+Where lines disagree, go with what most of them say. Say what lasts, not
+one event, which the next book's reader no longer needs. Answer with the
+line only.
+"""
+
+WHO_ENSEMBLE_FR = """Voici comment un personnage, {name}, a été décrit au fil d'un
+livre, du plus ancien au plus récent :
+{lines}
+
+En une ligne de 6 à 18 mots, dites ce que {name} est (espèce, métier ou
+titre) et son lien le plus important avec une autre personne nommée, à la
+FIN du livre. N'utilisez que les lignes ci-dessus. Certaines lignes nomment
+d'autres personnes : une espèce, un métier ou un titre qu'une ligne donne à
+quelqu'un d'autre n'est pas celui de {name}. Si les lignes se contredisent,
+suivez la majorité. Dites ce qui dure, et non un seul événement. Répondez
+par la ligne seule.
+"""
+
 #: everything a recap run says in the book's own language
 TEXT = {
     "en": {"system": SYSTEM, "hero_prompt": HERO_PROMPT, "prompt": PROMPT,
            "before": BEFORE, "lean": LEAN, "met": "met", "heard": "heard",
            "narrator": "the narrator",
-           "main": "the main character", "unlinked": "not yet connected to %s"},
+           "main": "the main character", "unlinked": "not yet connected to %s",
+           "notes": NOTES, "pov": POV, "story_prompt": STORY_PROMPT,
+           "who_prompt": WHO_PROMPT, "this_book": "this book",
+           "lead": LEAD, "fourth": FOURTH, "tie": TIE, "tie_end": TIE_END,
+           "ensemble": {"lead": ENSEMBLE_LEAD, "fourth": ENSEMBLE_FOURTH,
+                        "tie": ENSEMBLE_TIE, "tie_end": "",
+                        "who_prompt": WHO_ENSEMBLE},
+           "around": "the people around them", "leads": "the main characters",
+           "part_of_book": "part of a book",
+           "series_people": "From earlier books - who people are:",
+           "series_terms": "Words this series uses:",
+           "series_story": "The story so far, book by book:",
+           "book": "Book",
+           "earlier_here": "Earlier in this book (most recent last):",
+           "people_here": "People met or heard of so far in this book:"},
     "fr": {"system": SYSTEM_FR, "hero_prompt": HERO_PROMPT_FR, "prompt": PROMPT_FR,
            "before": BEFORE_FR, "lean": LEAN_FR, "met": "rencontré",
            "heard": "évoqué", "narrator": "le narrateur",
-           "main": "le personnage principal", "unlinked": "pas encore lié à %s"},
+           "main": "le personnage principal", "unlinked": "pas encore lié à %s",
+           "notes": NOTES_FR, "pov": POV_FR, "story_prompt": STORY_PROMPT_FR,
+           "who_prompt": WHO_PROMPT_FR, "this_book": "ce livre",
+           "lead": LEAD_FR, "fourth": FOURTH_FR, "tie": TIE_FR, "tie_end": TIE_END_FR,
+           "ensemble": {"lead": ENSEMBLE_LEAD_FR, "fourth": ENSEMBLE_FOURTH_FR,
+                        "tie": ENSEMBLE_TIE_FR, "tie_end": "",
+                        "who_prompt": WHO_ENSEMBLE_FR},
+           "around": "les gens qui l'entourent", "leads": "les personnages principaux",
+           "part_of_book": "une partie d'un livre",
+           "series_people": "Des livres précédents - qui sont les gens :",
+           "series_terms": "Mots propres à cette série :",
+           "series_story": "L'histoire jusqu'ici, livre par livre :",
+           "book": "Livre",
+           "earlier_here": "Plus tôt dans ce livre (le plus récent en dernier) :",
+           "people_here": "Personnes rencontrées ou évoquées jusqu'ici dans ce livre :"},
 }
 NARRATORS = {"the narrator", "le narrateur", "la narratrice"}
 UNLINKED = re.compile(r"(?i)^(not yet connected|pas encore li[ée])")
@@ -353,7 +543,24 @@ class RecapStage(Stage):
             ctx.note("no chapters long enough to recap")
             return StageResult(message="no recaps")
 
-        target = max(2000, int(rc.passage_words) * 6)
+        # Characters only: the recap text the book already carries is kept
+        # word for word, and only the who's who is written again. The model
+        # still reads every passage (it needs the scene to know who is in it),
+        # so this is no faster; what it saves is recaps someone was happy with.
+        # keep_recaps is the same where a book has recaps, and writes them in
+        # full where it has none, so one run covers a whole library.
+        cast_only = bool(getattr(rc, "cast_only", False))
+        keep = cast_only or bool(getattr(rc, "keep_recaps", False))
+        kept, kept_meta = (_existing_recaps(ctx.path) if keep else ([], {}))
+        if cast_only and not kept:
+            ctx.note("characters only: this book has no recaps to keep; left alone")
+            return StageResult(message="no recaps")
+        cast_only = bool(kept)
+        if cast_only:
+            ctx.note("keeping the recap text; writing the who's who again")
+        passage_words = int(kept_meta.get("passage_words") or rc.passage_words) \
+            if cast_only else int(rc.passage_words)
+        target = max(2000, passage_words * 6)
         passages = []                         # (order, path, label, paras)
         for order, path, label, paras in docs:
             for chunk in _segments(paras, target):
@@ -373,21 +580,123 @@ class RecapStage(Stage):
                            enabled=getattr(rc, "resume", True))
         if answers.got:
             ctx.note("resuming: %d answers kept from an earlier run" % len(answers.got))
+        series, index = series_memory.series_of(
+            ctx.path, getattr(ctx.record, "series", None),
+            getattr(ctx.record, "series_index", None))
+        memory = view = None
+        if getattr(rc, "series_memory", True) and series and index is not None:
+            memory = series_memory.Memory.open(getattr(rc, "series_dir", "") or None, series)
+            view = memory.before(index)
+        names_list = facts = None
+        if series:
+            names_list = series_memory.Names.open(getattr(rc, "series_dir", "") or None,
+                                                  series, index)
+            if names_list:
+                ctx.note("names list: %d names for %s" % (len(names_list.owner), series))
+            facts = series_memory.Facts.open(getattr(rc, "series_dir", "") or None,
+                                             series, index)
+            if facts:
+                ctx.note("facts list: %d people for %s" % (len(facts.owner), series))
         ctx.report("finding the main character (%d passages to go)" % len(passages))
-        hero = _hero(ctx, docs, lang, answers)
-        ctx.note("main character: %s" % hero)
+        hero = _lead_for(ctx, rc, view, docs, lang, answers)
+        if hero:
+            ctx.note("main character: %s" % hero)
+        else:
+            ctx.note("no single main character: the book follows several people")
+        if view:
+            ctx.note("series memory: %s, %d people from the books before book %s"
+                     % (series, len(view.people), index))
+        first_person = _first_person_setting(rc, docs, lang, hero)
+        if first_person:
+            ctx.note("told in the first person by %s" % hero)
         lean = bool(getattr(rc, "lean_cast", False)) and rc.cast
+        running = bool(getattr(rc, "running_memory", True))
+        story_too = bool(getattr(rc, "running_story", False))
+        pov = words["pov"].format(hero=hero) if first_person else ""
+        lead_parts = _prompt_parts(words, hero)
+        # The who's who from the whole book (stages/cast.py) rather than from
+        # each passage's answer. With the recap text kept, the passages are
+        # not read at all.
+        method = getattr(rc, "cast_method", "passages")
+        book_cast = rc.cast and method in ("book", "facts", "xray")
 
-        def one(item, known=None):
+        def whole_book_cast():
+            if method == "facts":
+                from . import cast_facts as book
+            elif method == "xray":
+                from . import cast_xray as book
+            else:
+                from . import cast as book
+
+            def ask(prompt, system, usable, schema=None):
+                return answers.ask(ctx.provider, prompt, system, usable=usable, schema=schema)
+            people, report, seen = book.build(
+                ctx, docs, ask, hero=hero, first_person=first_person, lang=lang,
+                view=view, title=_book_title(ctx.path),
+                workers=max(1, ctx.config.ai.concurrency), names_list=names_list,
+                facts=facts)
+            if answers.replay is not None:
+                report = list(report) + ["replay: %d replies from the tape, %d not on it%s"
+                                         % (answers.played, answers.missed,
+                                            " (left empty)" if answers.replay_only else "")]
+            for line in report:
+                ctx.note("who's who: " + line)
+            _cast_report(rc, ctx.path, report, people)
+            state["seen"] = seen
+            return people
+
+        state = dict(passage_words=passage_words, kept_meta=kept_meta, cast_only=cast_only,
+                     hero=hero, lang=lang, first_person=first_person, memory=memory,
+                     series=series, index=index, words=words, answers=answers,
+                     book_cast=book_cast, seen=())
+        if book_cast and cast_only:
+            return self._write(ctx, kept, whole_book_cast(), **state)
+
+        def remembered(name, known):
+            """Who the reader knows this person to be before the passage."""
+            if known:
+                for n, (_st, rel) in known.items():
+                    if n.lower() == name.lower() and rel and not UNLINKED.match(rel):
+                        return rel
+                # "Imani" earlier in the book is "Imani C" now
+                for n, (_st, rel) in known.items():
+                    if rel and not UNLINKED.match(rel) and series_memory.same_person(n, name):
+                        return rel
+            tie = view.tie(name) if view else ""
+            return "" if UNLINKED.match(tie or "") else tie
+
+        def notes_for(text, known, earlier):
+            out = []
+            if view:
+                out.append(view.notes(text, words, stories=story_too))
+            if running and story_too and earlier:
+                out.append(words["earlier_here"])
+                out.extend("- " + e[:500] for e in earlier[-5:])
+            if running and known and not lean:
+                here = [(n, st, rel) for n, (st, rel) in known.items()
+                        if re.search(r"(?<![\w])%s(?![\w])"
+                                     % re.escape(_bare(n).split()[0] if _bare(n).split() else n),
+                                     text)]
+                if here:
+                    out.append(words["people_here"])
+                    out.extend("- %s (%s): %s" % (n, words[st], rel or "?")
+                               for n, st, rel in here[-40:])
+            block = "\n".join(o for o in out if o).strip()
+            return words["notes"].format(notes=block) if block else ""
+
+        def one(item, known=None, earlier=None):
             order, path, label, paras = item
             text = "\n\n".join(t for _n, t in paras)
             tail = lookup.get(id(item), "")
             before = words["before"].format(text=tail) if tail else ""
-            if known:
+            if known and lean:
                 listed = "\n".join("- %s (%s): %s" % (n, words[st], rel or "?")
                                     for n, (st, rel) in list(known.items())[-80:])
-                before = words["lean"].format(known=listed, hero=hero).lstrip() + "\n" + before
-            prompt = words["prompt"].format(hero=hero, text=text[:16000], before=before)
+                before = words["lean"].format(
+                    known=listed, hero=hero or words["around"]).lstrip() + "\n" + before
+            before = notes_for(text, known, earlier) + before
+            prompt = words["prompt"].format(text=text[:16000], before=before, pov=pov,
+                                            **lead_parts)
             try:
                 reply = answers.ask(ctx.provider, prompt, words["system"],
                                     usable=lambda t: any(_parse(t)))
@@ -398,8 +707,11 @@ class RecapStage(Stage):
             if not (summary or people):
                 unread.append(reply)
                 return None
-            if known:
+            if known and lean:
                 people = _with_known(people, known, paras)
+            here = not hero or first_person or _hero_here(hero, paras)
+            people = [(n, st, i, _settle_tie(r, hero, here, remembered(n, known), lang))
+                      for n, st, i, r in people]
             return (item, summary, people)
 
         unread: list[str] = []
@@ -407,21 +719,26 @@ class RecapStage(Stage):
         results: list = [None] * len(passages)
         known: dict = {}
         done = 0
+
+        def earlier_than(i):
+            return [r[1] for r in results[:i] if r and r[1]] if running else None
+
         ctx.report("passage 0/%d" % len(passages))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            # In lean mode each batch is told who the batches before it met,
-            # so a batch of `workers` passages still runs at once.
-            step = workers if lean else len(passages)
+            # With a running memory (or lean mode) each batch is told what the
+            # batches before it found, so passages go `workers` at a time.
+            step = workers if (lean or running) else len(passages)
             for start in range(0, len(passages), step):
                 batch = range(start, min(start + step, len(passages)))
-                snapshot = dict(known) if lean else None
+                snapshot = dict(known) if (lean or running) else None
+                story = earlier_than(start)
                 answered = pool.map(one, [passages[i] for i in batch],
-                                    [snapshot] * len(batch))
+                                    [snapshot] * len(batch), [story] * len(batch))
                 for i, res in zip(batch, answered, strict=True):
                     done += 1
                     ctx.report("passage %d/%d" % (done, len(passages)))
                     results[i] = res
-                    if lean and res:
+                    if (lean or running) and res:
                         _learn(known, res[2])
         # A passage that timed out or came back garbled gets one more try,
         # rather than leaving a hole in the recaps.
@@ -430,8 +747,17 @@ class RecapStage(Stage):
             ctx.note("retrying %d passage(s) that failed" % len(missed))
             unread.clear()
             for i in missed:
-                results[i] = one(passages[i], dict(known) if lean else None)
+                results[i] = one(passages[i], dict(known) if (lean or running) else None,
+                                 earlier_than(i))
         got = [r for r in results if r]
+        lost = len(passages) - len(got)
+        if got and lost > max(2, len(passages) // 20):
+            # The model went away partway (Ollama was stopped two minutes into
+            # DCC 1, and 146 of 163 passages failed): writing what came back
+            # would swap a full who's who for a stub. Leave the book as it is.
+            ctx.note("%d of %d passages failed; the book is left as it was"
+                     % (lost, len(passages)))
+            return StageResult(ok=False, message="too many passages failed")
         if unread:
             ctx.note("%d of %d replies were not in the expected shape; the first began: %r"
                      % (len(unread), len(passages), unread[0][:300]))
@@ -441,16 +767,51 @@ class RecapStage(Stage):
 
         parts = [(it[0], it[1], it[3][-1][0], it[2], s)
                  for it, s, _p in got if s]
-        people = _people_rows(got, hero, ctx, lang) if rc.cast else []
+        if cast_only:
+            parts = kept
+        if book_cast:
+            people = whole_book_cast()
+        elif rc.cast:
+            people = _people_rows(got, hero, ctx, lang, settled=True,
+                                  series_name=view.name_of if view else None,
+                                  series_lines=view.lines() if view else None)
+        else:
+            people = []
+        return self._write(ctx, parts, people, **state)
+
+    def _write(self, ctx, parts, people, *, passage_words, kept_meta, cast_only, hero,
+               lang, first_person, memory, series, index, words, answers, book_cast, seen=()):
+        rc = ctx.config.recaps
         legacy = bool(getattr(rc, "legacy_files", False))
         chapters = _chapter_rows(parts)
         cast = _legacy_cast(people) if legacy else []
-        meta = [("format", str(FORMAT)), ("passage_words", str(rc.passage_words)),
-                ("model", str(getattr(ctx.provider, "model", "") or "")),
+        model = str(getattr(ctx.provider, "model", "") or "")
+        meta = [("format", str(FORMAT)), ("passage_words", str(passage_words)),
+                ("model", kept_meta.get("model", model) if cast_only else model),
                 ("main_character", hero), ("language", lang)]
+        if not hero:
+            meta.append(("ensemble", "1"))
+        if cast_only:
+            meta.append(("people_model", model))
+        if book_cast:
+            meta.append(("people_method", "book"))
+        if first_person:
+            meta.append(("first_person", "1"))
+        if memory is not None:
+            meta += [("series", series), ("series_index", str(index))]
         _embed(ctx.path, parts, people, chapters if legacy else [], cast,
-               _spine(ctx.path), meta)
+               _spine(ctx.path), meta, seen)
         answers.forget()
+
+        if memory is not None:
+            try:
+                if book_cast:
+                    _remember_entries(ctx, memory, index, hero, first_person, parts, people,
+                                      words)
+                else:
+                    _remember(ctx, memory, index, hero, first_person, parts, people, words)
+            except Exception as exc:                        # noqa: BLE001
+                ctx.note("series memory not updated: %s" % exc)
 
         n_people = len({r[3] for r in people})
         heard = len({r[3] for r in people} - {r[3] for r in people if r[4] == "met"})
@@ -460,7 +821,389 @@ class RecapStage(Stage):
         return StageResult(message="%d recaps, %d people" % (len(chapters), n_people))
 
 
+# ------------------------------------------------------------ the series
+
+
+def _existing_recaps(book: Path):
+    """-> (parts rows as _embed writes them, meta) from the book's own
+    recaps/parts.tsv, or ([], {}) when it has none."""
+    try:
+        with zipfile.ZipFile(book) as z:
+            opf_name = _opf_name(z)
+            base = posixpath.dirname(opf_name) if opf_name else ""
+            here = (base + "/" if base else "") + RECAP_DIR + "/"
+
+            def rows(name):
+                try:
+                    raw = z.read(here + name).decode("utf-8", "replace")
+                except KeyError:
+                    return []
+                return [r.split("\t") for r in raw.splitlines() if r.strip()]
+
+            parts = []
+            for r in rows("parts.tsv"):
+                if len(r) >= 5 and r[4].strip():
+                    try:
+                        parts.append((int(r[0]), r[1], int(r[2]), r[3], r[4]))
+                    except ValueError:
+                        continue
+            meta = {r[0]: r[1] for r in rows("meta.tsv") if len(r) >= 2}
+    except (OSError, zipfile.BadZipFile):
+        return [], {}
+    return parts, meta
+
+
+def reading_order(books):
+    """Books with a series and a number go in series order, so each one is
+    recapped after the books whose memory it needs; the rest keep their place
+    after them."""
+    keyed = []
+    for i, b in enumerate(books):
+        path = b[1] if isinstance(b, tuple) else b
+        try:
+            series, index = series_memory.series_of(path)
+        except Exception:                                   # noqa: BLE001
+            series, index = "", None
+        keyed.append(((0, series.lower(), float(index), i) if series and index is not None
+                      else (1, "", 0.0, i), b))
+    return [b for _k, b in sorted(keyed, key=lambda kb: kb[0])]
+
+
+def _first_person_setting(rc, docs, lang: str, hero: str) -> bool:
+    if not hero:
+        return False
+    setting = str(getattr(rc, "first_person", "auto") or "auto").strip().lower()
+    if setting in ("yes", "true", "1", "on"):
+        return hero not in NARRATORS
+    if setting in ("no", "false", "0", "off"):
+        return False
+    return hero not in NARRATORS and _first_person(docs, lang)
+
+
+_QUOTED = re.compile(r"[\u201c\"\u00ab][^\u201d\"\u00bb]{0,1500}[\u201d\"\u00bb]")
+_I = {"en": re.compile(r"(?<![\w'\u2019])(?:I|me|my|myself)(?![\w])"),
+      "fr": re.compile(r"(?i)(?<![\w])(?:je|j['\u2019]|moi|mon|ma|mes)(?![\w])")}
+
+
+def _first_person(docs, lang: str = "en") -> bool:
+    """Is the book narrated as "I"? Dialogue is taken out first, since
+    everyone says "I" in speech; what is left is the narration.
+
+    Dungeon Crawler Carl is told by Carl as "I". A passage that never prints
+    "Carl" was taken to be a passage without him, and every tie to him in it
+    was struck out, so his friends came out "not yet connected to Carl".
+    """
+    if not docs:
+        return False
+    picks = docs[:: max(1, len(docs) // 12)][:12]
+    text = " ".join(t for _o, _p, _l, ps in picks for _n, t in ps)[:300000]
+    narration = _QUOTED.sub(" ", text)
+    words = len(narration.split())
+    if words < 500:
+        return False
+    hits = len(_I.get(lang, _I["en"]).findall(narration))
+    return hits / words > 0.015
+
+
+def _hero_here(hero: str, paras) -> bool:
+    return hero in NARRATORS or any(
+        _all_words_present(w, paras) for w in hero.split() if w[:1].isupper())
+
+
+def _settle_tie(rel: str, hero: str, here: bool, known: str, lang: str = "en") -> str:
+    """What someone is to the lead, as the reader understands it here.
+
+    - The model said "not yet connected" (or nothing) but the reader already
+      knows the tie, from an earlier book or passage: keep what they know.
+    - The passage has no lead in it but claims a tie to them: a tie the
+      reader already knows stands; an unknown one is the model guessing
+      (Bellatrix as "Harry's acquaintance") and is struck out.
+    - A known tie to the lead is never swapped for a description that drops
+      the lead: one scene does not unmake who someone is.
+    """
+    known = known if known and not UNLINKED.match(known) else ""
+    rel, cut = _drop_scene(rel)
+    if cut and known:
+        return known
+    if not rel or UNLINKED.match(rel):
+        return known or rel
+    words = [w for w in hero.split() if w[:1].isupper()]
+
+    def names_lead(t: str) -> bool:
+        return bool(words) and bool(
+            re.search(r"\b(%s)\b" % "|".join(map(re.escape, words)), t))
+
+    if known and _scene_only(rel):
+        return known
+    if known and names_lead(known) and not names_lead(rel):
+        # "a crawler in the room" after "Carl's cat and crawl partner": a
+        # passing scene must not wipe who someone is
+        return known
+    if here:
+        return rel
+    if known and names_lead(rel):
+        return known
+    return _unclaim(rel, hero, lang)
+
+
+_ROLE_LEAD = re.compile(
+    r"(?i)^(?:not yet connected to [^;,]+[;,]\s*|pas encore li[ée]e? [àa] [^;,]+[;,]\s*)")
+_VAGUE = re.compile(
+    r"(?i)^(?:a |an |the |someone |somebody |une? |quelqu'un )?"
+    r"(?:person|someone|somebody|man|woman|figure|individual|people|personne|homme|femme)?"
+    r"\s*(?:who|that|qui)\b")
+
+
+_SCENE_CLAUSE = re.compile(
+    r"(?i)[,;]?\s+(?:who|that|qui)\s+(?:is|are|was|has just|have just|just|ha(?:s|ve) \w+ed|"
+    r"est en train de|vient de)\b.*$|"
+    r"[,;]?\s+(?:who|that)\s+(?!leads\b|runs\b|owns\b|works\b|lives\b)\w+[^s\s]?s"
+    r"\s+(?:on|about|from|at|into|with|the|a|an|her|his|their|blood|that|[A-Z])\S*.*$|"
+    r"[,;]?\s+\w+ing\s+(?:on|in|at|behind|from|to|into|with|under|over|the|a|an|her|his|"
+    r"their|dying)\b.*$|"
+    r"[,;]\s+\w+\s+and\s+\w+ing\s+(?:on|in|at|the|a|an|her|his|their|[A-Z])\S*.*$")
+
+
+def _drop_scene(rel: str) -> tuple[str, bool]:
+    """'Carl's ally who has triggered the trap and is escaping via the
+    stairwell' -> ("Carl's ally", True): the part about this one scene goes."""
+    m = _SCENE_CLAUSE.search(rel or "")
+    if not m or len(rel[:m.start()].split()) < 2:
+        return rel, False
+    return rel[:m.start()].rstrip(" ,;"), True
+
+
+def _scene_only(rel: str) -> bool:
+    """A line that says what someone did in one scene, not who they are:
+    "clutching the skill potion to her chest, staring at Carl", "a person
+    who suggested opening the door"."""
+    t = _ROLE_LEAD.sub("", rel or "").strip()
+    if not t:
+        return False
+    first = t.split()[0].lower().strip(",;")
+    if first.endswith("ing") and first not in {"king", "viking", "darling", "sibling",
+                                                "ruling", "duckling", "something"}:
+        return True
+    # "awake and hugging Britney at the top of the stairs"
+    if re.match(r"(?i)^\w+,? and \w+ing\b", t):
+        return True
+    return bool(_VAGUE.match(t))
+
+
+def _tidy_key(text: str) -> str:
+    return re.sub(r"\W+", " ", text or "").strip().lower()
+
+
+def _backed(line: str, lines, name: str, hero: str) -> bool:
+    """Every capitalised word in a written-up line is in the lines it came
+    from, and in most of them when the lines disagree: Donut came out "a
+    Bugaboo", a word the lines used for someone else."""
+    own = {w.lower() for w in (name + " " + hero).split()}
+    text = [t.lower() for t in lines]
+    for w in re.findall(r"(?<![\w'’])[A-Z][\w'’-]{2,}", line):
+        lw = w.lower().rstrip("'’s")
+        if lw in own or lw in _NOT_A_NAME:
+            continue
+        hits = sum(1 for t in text if lw in t)
+        if hits == 0 or (len(text) >= 3 and hits * 2 < len(text) and hits < 2):
+            return False
+    return True
+
+
+def _nicknames(names: dict, listed_together: set, hero: str) -> dict:
+    """"Bea" and "Beatrice" as one person: a one-word name that begins
+    exactly one other person's first name is that person, unless some
+    passage lists the two side by side (then they are two people)."""
+    shown = set(names.values())
+    firsts: dict[str, list[str]] = {}
+    for d in shown:
+        if d.split():
+            firsts.setdefault(d.split()[0].lower(), []).append(d)
+    remap = {}
+    for d in shown:
+        if len(d.split()) != 1 or len(d) < 3 or _is_hero(d, hero):
+            continue
+        low = d.lower()
+        longer = [x for f, xs in firsts.items() for x in xs
+                  if f != low and f.startswith(low)]
+        if len(longer) != 1 or _is_hero(longer[0], hero):
+            continue
+        if frozenset((d, longer[0])) in listed_together:
+            continue
+        remap[d] = longer[0]
+    return {raw: remap.get(d, d) for raw, d in names.items()}
+
+
+def _remember(ctx, memory, index, hero, first_person, parts, people, words) -> None:
+    """Fold a finished book into its series memory, for the next book."""
+    provider = ctx.provider
+    ctx.report("updating the series memory")
+    lines: dict[str, list[str]] = {}
+    seen: dict[str, int] = {}
+    met: set[str] = set()
+    for _o, _p, _para, who, status, n, text in people:
+        seen[who] = max(seen.get(who, 0), int(n))
+        if status == "met":
+            met.add(who)
+        if text and text not in lines.setdefault(who, []):
+            lines[who].append(text)
+    keep = [w for w in sorted(seen, key=lambda w: -seen[w])
+            if (seen[w] >= 2 or w in met) and not _is_hero(w, hero)][:60]
+    final = {}
+    for rank, who in enumerate(keep):
+        said = lines.get(who) or []
+        linked = [t for t in said if not UNLINKED.match(t)] or said
+        desc = linked[-1] if linked else ""
+        if rank < 20 and len(linked) > 1:
+            # the main cast gets one line written from everything the book
+            # said about them, not just the last mention
+            try:
+                who_prompt = words["who_prompt"] if hero else words["ensemble"]["who_prompt"]
+                prompt = who_prompt.format(
+                    name=who, hero=hero, lines="\n".join("- " + t for t in linked[-10:]))
+                got = provider.complete(prompt, system=words["system"]).text
+                got = _tidy(got.strip().splitlines()[0].strip(" -\"'*"), 20) if got.strip() else ""
+                if len(got.split()) >= 3 and _backed(got, linked[-10:], who, hero):
+                    desc = got
+            except Exception:                               # noqa: BLE001
+                pass
+        desc = _lasting(desc, linked)
+        if desc:
+            final[who] = desc
+    summaries = [s for *_x, s in parts if s]
+    story = _story(provider, summaries, hero or words["leads"], words)
+    memory.reload()                 # keep any hand fix made during this book
+    memory.record_book(index, _book_title(ctx.path), story, final,
+                       lead=hero, first_person=first_person, ensemble=not hero)
+    memory.save()
+    ctx.note("series memory updated: %s (%d people)" % (memory.path, len(final)))
+
+
+def _remember_entries(ctx, memory, index, hero, first_person, parts, people, words) -> None:
+    """Fold a book whose who's who was written from the whole book into its
+    series memory. Each entry is already one checked line about the person as
+    the book leaves them, so the last one is kept as it is - the main
+    character's too, so the next book starts from who they have become."""
+    ctx.report("updating the series memory")
+    last: dict[str, tuple[int, str, str]] = {}
+    for _o, _p, _para, who, status, n, text in people:
+        if text:
+            last[who] = (int(n), status, text)
+    # the xray who's who already left out everyone who is not a character,
+    # and someone named once in book 1 can be back in book 3 (Hekla, Elle):
+    # it keeps everyone, so they come back under the same name
+    xray = getattr(getattr(ctx.config, "recaps", None), "cast_method", "") == "xray"
+    keep = sorted((w for w, (n, st, _t) in last.items() if xray or n >= 2 or st == "met"),
+                  key=lambda w: -last[w][0])[:300 if xray else 80]
+    final = {}
+    for who in keep:
+        desc = _lasting(last[who][2], [last[who][2]])
+        if desc:
+            final[who] = desc
+    summaries = [s for *_x, s in parts if s]
+    story = _story(ctx.provider, summaries, hero or words["leads"], words)
+    memory.reload()
+    memory.record_book(index, _book_title(ctx.path), story, final,
+                       lead=hero, first_person=first_person, ensemble=not hero)
+    memory.save()
+    ctx.note("series memory updated: %s (%d people)" % (memory.path, len(final)))
+
+
+def _cast_report(rc, book: Path, report, people) -> None:
+    """With cast_report_dir set, what the whole-book who's who did with a
+    book, and every entry it wrote, as a text file to read over."""
+    folder = (getattr(rc, "cast_report_dir", "") or "").strip()
+    if not folder:
+        return
+    try:
+        out = Path(folder).expanduser()
+        out.mkdir(parents=True, exist_ok=True)
+        lines = [Path(book).name, ""] + list(report) + [""]
+        for order, _path, para, who, status, n, text in people:
+            lines.append("%d:%d\t%s\t%s\t%d\t%s" % (order, para, who, status, n, text))
+        (out / (Path(book).stem + ".cast.txt")).write_text("\n".join(lines) + "\n",
+                                                           encoding="utf-8")
+    except OSError:
+        pass
+
+
+_DEATH = re.compile(r"(?i)\b(?:deceased|dead|late|killed|décédée?|morte?|feue?)\b")
+_LEVEL = re.compile(r"(?i)\b(?:(an?|une?)\s+)?(?:level|niveau)[\s-]+(?:\d+|[a-z]+)\s+(?=\w)")
+
+
+def _lasting(desc: str, lines) -> str:
+    """What the next book may be told about someone. A level is only true
+    for a while (Katia stayed "level nine" for three books), and one line
+    calling someone dead is not enough: Mordecai was "deceased" from book 3 on
+    on the word of a single passage."""
+    if not desc:
+        return desc
+    if _DEATH.search(desc) and sum(1 for t in lines if _DEATH.search(t)) * 2 < len(lines):
+        desc = re.sub(r"(?i)\s*\b(?:deceased|late)\b", "", desc)
+        desc = re.sub(r"(?i),?\s*(?:who|that)\s+(?:is|was)\s+(?:now\s+)?dead\b.*$|"
+                      r",?\s*\b(?:killed|dead)\b.*$", "", desc)
+    def drop_level(m):
+        art = m.group(1) or ""
+        if art.lower() in ("a", "an"):
+            # "a level ten human" -> "a human", "a level nine angel" -> "an angel"
+            rest = desc[m.end():m.end() + 1].lower()
+            art = art[0] + ("n" if rest and rest in "aeiou" else "")
+        return art + " " if art else ""
+    desc = _LEVEL.sub(drop_level, desc)
+    desc = re.sub(r"\s{2,}", " ", desc).strip(" ,;")
+    return desc
+
+
+def _story(provider, summaries, hero, words, chunk: int = 9000) -> str:
+    """The book's story in a paragraph, built up from its passage recaps in
+    pieces small enough for the model to read at once."""
+    if not summaries:
+        return ""
+    groups, cur = [], ""
+    for s in summaries:
+        if cur and len(cur) + len(s) > chunk:
+            groups.append(cur)
+            cur = ""
+        cur += s + "\n"
+    groups.append(cur)
+
+    def ask(text, what, n):
+        try:
+            got = provider.complete(words["story_prompt"].format(
+                what=what, words=n, hero=hero, text=text), system=words["system"]).text
+            return re.sub(r"\s+", " ", got).strip()
+        except Exception:                                   # noqa: BLE001
+            return ""
+
+    if len(groups) == 1:
+        return ask(groups[0], words["this_book"], 200)
+    pieces = [p for p in (ask(g, words["part_of_book"], 120) for g in groups) if p]
+    if not pieces:
+        return ""
+    return ask("\n".join(pieces), words["this_book"], 220) or " ".join(pieces)
+
+
+def _book_title(book: Path) -> str:
+    m = re.search(r"<dc:title\b[^>]*>([^<]+)<", _opf_text(book))
+    return html.unescape(m.group(1)).strip() if m else Path(book).stem
+
+
 # ------------------------------------------------------------ resuming
+
+
+def _read_answers(path: Path) -> dict:
+    got: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                    got[d["k"]] = d["text"]
+                except (ValueError, KeyError, TypeError):
+                    continue            # a line cut short by a crash
+    except OSError:
+        pass
+    return got
 
 
 class _Answers:
@@ -480,28 +1223,56 @@ class _Answers:
         self.enabled = enabled
         self.lock = threading.Lock()
         self.got: dict[str, str] = {}
+        # A tape: every reply of a run, kept per book (EPUBKIT_TAPE=dir), so
+        # a code change can be tried again on the same replies in minutes
+        # (EPUBKIT_REPLAY=dir) instead of hours of model time. With
+        # EPUBKIT_REPLAY_ONLY=1 a question not on the tape gets an empty
+        # reply instead of going to the model, and is counted.
+        self.tape = self.replay = None
+        self.played = self.missed = 0
+        self.replay_only = os.environ.get("EPUBKIT_REPLAY_ONLY", "") not in ("", "0")
+        stem = Path(book).stem + ".jsonl"
+        if os.environ.get("EPUBKIT_TAPE"):
+            self.tape = Path(os.environ["EPUBKIT_TAPE"]).expanduser() / stem
+            try:
+                self.tape.parent.mkdir(parents=True, exist_ok=True)
+                self.tape.write_text("", encoding="utf-8")
+            except OSError:
+                self.tape = None
+        if os.environ.get("EPUBKIT_REPLAY"):
+            self.replay = _read_answers(Path(os.environ["EPUBKIT_REPLAY"]).expanduser() / stem)
         if not enabled:
             return
-        try:
-            with open(self.path, encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        d = json.loads(line)
-                        self.got[d["k"]] = d["text"]
-                    except (ValueError, KeyError, TypeError):
-                        continue            # a line cut short by a crash
-        except OSError:
-            pass
+        self.got = _read_answers(self.path)
 
     def _key(self, prompt: str, system: str) -> str:
         raw = "\0".join((self.model, system or "", prompt))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def ask(self, provider, prompt: str, system: str, usable=None) -> str:
+    def _loose(self, prompt: str, system: str) -> str:
+        """The passage a question is about (between <<< and >>>), without the
+        list of who is known so far. A code change upstream rewrites that
+        list for every later question, so an exact-match tape stops matching
+        from the first change on (book 3 of a replay got 0 of 67 replies);
+        matched by its passage the reply still answers the same text."""
+        m = re.search(r"<<<(.*?)>>>", prompt, re.S)
+        return self._key("loose\0" + m.group(1), system) if m else ""
+
+    def ask(self, provider, prompt: str, system: str, usable=None, schema=None) -> str:
         key = self._key(prompt, system)
+        loose = self._loose(prompt, system)
         if key in self.got:
-            return self.got[key]
-        text = provider.complete(prompt, system=system).text
+            return self._taped(key, self.got[key], loose)
+        if self.replay is not None and (key in self.replay or loose in self.replay):
+            self.played += 1
+            return self._taped(key, self.replay.get(key) or self.replay[loose], loose)
+        if self.replay is not None:
+            self.missed += 1
+            if self.replay_only:
+                return ""
+        text = self._taped(key, (provider.complete(prompt, system=system, schema=schema)
+                                 if schema is not None else
+                                 provider.complete(prompt, system=system)).text, loose)
         if self.enabled and (usable is None or usable(text)):
             with self.lock:
                 self.got[key] = text
@@ -511,6 +1282,18 @@ class _Answers:
                         fh.write(json.dumps({"k": key, "text": text}) + "\n")
                 except OSError:
                     pass                    # resuming is a bonus, not a need
+        return text
+
+    def _taped(self, key: str, text: str, loose: str = "") -> str:
+        if self.tape is not None:
+            with self.lock:
+                try:
+                    with open(self.tape, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"k": key, "text": text}) + "\n")
+                        if loose:
+                            fh.write(json.dumps({"k": loose, "text": text}) + "\n")
+                except OSError:
+                    pass
         return text
 
     def forget(self) -> None:
@@ -570,7 +1353,10 @@ def _documents(book: Path, min_chars: int):
                 if href:
                     spine.append(_join(base, href))
             titles = _toc_titles(z, opf, base, manifest)
+            last = _story_end(spine)
             for order, full in enumerate(spine):
+                if order > last:
+                    break
                 try:
                     raw = z.read(full)
                 except KeyError:
@@ -587,6 +1373,10 @@ def _documents(book: Path, min_chars: int):
                     # before chapter 1. Nothing here is story.
                     continue
                 head = " ".join(t for _n, t in paras)[:1200].lower()
+                if out and _PREVIEW.search(head[:400]):
+                    # "Turn the page for a sneak peek at..." - the next book
+                    # starts here, and nothing after it is this story
+                    break
                 if any(m in head for m in FRONT) and size < min_chars * 4:
                     continue
                 if size < min_chars and not label:
@@ -598,6 +1388,32 @@ def _documents(book: Path, min_chars: int):
     except (zipfile.BadZipFile, OSError):
         return []
     return out
+
+
+_PREVIEW = re.compile(r"\b(?:sneak peek|an excerpt from|a preview of|preview of the next|"
+                      r"turn the page for a|un extrait (?:de|du))\b", re.I)
+_FILE_BOOK = re.compile(r"^([A-Za-z]+\d+)[_\-]")
+
+
+def _story_end(spine: list[str]) -> int:
+    """The last spine position that belongs to this book. A bundled preview of
+    the next one comes after it under its own file names (Harry Potter 1
+    ends with hp02_ch001, Chamber of Secrets' first chapter): when most files
+    share a "hp01_"-style prefix, a run at the end with another one is cut."""
+    keys = [(_FILE_BOOK.match(posixpath.basename(p)) or [None, None])[1] for p in spine]
+    known = [k for k in keys if k]
+    if len(known) < max(4, len(spine) // 2):
+        return len(spine) - 1
+    main = max(set(known), key=known.count)
+    # a book code ("hp01", "b1"), not a running number ("part0000",
+    # "s021"): Calibre's numbered files once cut DCC 5 off at its 4th file
+    if known.count(main) < len(spine) // 2 or len(re.sub(r"\D", "", main)) > 3:
+        return len(spine) - 1
+    last = max(i for i, k in enumerate(keys) if k == main)
+    # only cut when what follows is another book's files, not plain back matter
+    if any(k and k != main for k in keys[last + 1:]):
+        return last
+    return len(spine) - 1
 
 
 def _opf_text(book: Path) -> str:
@@ -788,6 +1604,84 @@ def _tail(paras, chars: int = 900) -> str:
 # ------------------------------------------------------------ the model
 
 
+#: main_character values that mean "this book has none"
+NO_LEAD = {"none", "-", "ensemble", "aucun", "personne"}
+
+
+def _prompt_parts(words, hero: str) -> dict:
+    """PROMPT's lead-dependent pieces: around `hero`, or for no one."""
+    w = {**words, **words["ensemble"]} if not hero else words
+    return {k: w[k].format(hero=hero) for k in ("lead", "fourth", "tie", "tie_end")}
+
+
+def _lead_for(ctx, rc, view, docs, lang, answers) -> str:
+    """Who the book's who's who is written around, or "" for no one.
+
+    - main_character in the settings wins ("none" means no one).
+    - A series the memory knows follows several people stays that way.
+    - The series' lead carries over while they are still in most chapters:
+      DCC 2 and 3 open on Donut, and must not reopen who the lead is. A
+      lead who has gone (Eddard, in A Clash of Kings) does not.
+    - Otherwise the book's own lead, unless it follows several people.
+    """
+    fixed = (getattr(rc, "main_character", "") or "").strip()
+    if fixed.lower() in NO_LEAD:
+        return ""
+    if fixed:
+        return fixed
+    if view and view.ensemble:
+        return ""
+    lead = view.lead if view and view.lead else ""
+    if lead and _share(lead, docs) >= 0.5:
+        return lead
+    if lead:
+        ctx.note("%s, the series' main character, is in few chapters of this book" % lead)
+    hero = _hero(ctx, docs, lang, answers)
+    if _ensemble(docs, hero):
+        return ""
+    return hero
+
+
+def _share(name: str, docs) -> float:
+    """The part of the book's chapters that name `name`."""
+    words = [w for w in re.findall(r"[\w'’-]+", _bare(name))
+             if w[:1].isupper() and w.lower() not in _NOT_A_NAME]
+    if not docs or not words:
+        return 1.0
+    pat = re.compile(r"(?<![\w])%s(?![\w])" % re.escape(words[0]))
+    hits = sum(1 for _o, _p, _l, paras in docs if any(pat.search(t) for _n, t in paras))
+    return hits / len(docs)
+
+
+def _viewpoints(docs) -> dict:
+    """{name: chapters} for chapters titled with a character's name: the
+    shape of a book told by turns ("TYRION", "Catelyn", "Chapter 3: Jon")."""
+    from collections import Counter
+
+    names = {n.lower() for n in _recurring_names(docs, keep=40)}
+    got = Counter()
+    for _o, _p, label, _paras in docs:
+        hit = [w for w in re.findall(r"[A-Za-zÀ-ÿ'’-]+", label or "") if w.lower() in names]
+        if hit:
+            got[hit[0].title()] += 1
+    return dict(got)
+
+
+def _ensemble(docs, hero: str) -> bool:
+    """Does the book follow several people in turn, rather than one lead?
+
+    Yes when three or more characters each title chapters of their own and
+    together they title much of the book, or when the chosen lead is in few
+    of its chapters.
+    """
+    if hero in NARRATORS or len(docs) < 6:
+        return False
+    pov = {n: c for n, c in _viewpoints(docs).items() if c >= 2}
+    if len(pov) >= 3 and sum(pov.values()) >= 0.4 * len(docs):
+        return True
+    return bool(hero) and _share(hero, docs) < 0.25
+
+
 def _hero(ctx: Context, docs, lang: str = "en", answers=None) -> str:
     """The main character, judged from the whole book rather than its opening.
 
@@ -946,7 +1840,7 @@ def _parse(text: str) -> tuple[str, list[tuple[str, str, str, str]]]:
                 continue
             # the French prompt asks for "rencontré" / "évoqué"
             status = "met" if status.startswith(("met", "rencontr")) else "heard"
-            people.append((name, status, _tidy(intro), _tidy(rel)))
+            people.append((name, status, _tidy(intro), _tidy(rel, 24)))
     return summary, people
 
 
@@ -1094,7 +1988,8 @@ _NOT_A_NAME = {"the", "mr", "mr.", "mrs", "mrs.", "miss", "ms", "ms.", "dr", "dr
                "tante", "professeur", "capitaine", "sainte", "père", "mère"}
 
 
-def _people_rows(got, hero, ctx, lang: str = "en"):
+def _people_rows(got, hero, ctx, lang: str = "en", settled: bool = False,
+                 series_name=None, series_lines=None):
     """-> [(order, path, para, name, met|heard, description)], sorted by position.
 
     Two rows per person per passage at most:
@@ -1128,17 +2023,70 @@ def _people_rows(got, hero, ctx, lang: str = "en"):
                 rel = TEXT[lang]["main"]
             else:
                 rel = _not_the_lead(rel, intro)
-                if not hero_here:
+                if not hero_here and not settled:
                     rel = _unclaim(rel, hero, lang)
             raw.append((_pos(order, at), (order, path, at, status, "intro", intro), name))
             raw.append((_pos(order, end), (order, path, end, status, "rel", rel), name))
 
     names = _identities([(pos, name) for pos, _d, name in raw], ctx)
+    together = set()
+    for _item, _s, listed in got:
+        ns = sorted({names.get(n, n) for n, *_ in listed})
+        together.update(frozenset((a, b)) for i, a in enumerate(ns) for b in ns[i + 1:])
+    names = _nicknames(names, together, hero)
+    if series_name:
+        # someone the earlier books know by name is not folded together with
+        # a name that cannot be them: "Donut" with "Robot Donut", new in DCC 4
+        groups: dict[str, list[str]] = {}
+        for said_as, d in names.items():
+            groups.setdefault(d, []).append(said_as)
+        for forms_here in groups.values():
+            known = {series_name(f, True) for f in forms_here} - {""}
+            if len(known) != 1:
+                continue
+            mine = known.pop()
+            for f in forms_here:
+                if series_name(f) != mine:
+                    names[f] = f
+        # one person, one name across the series: book 5 listed "Elle
+        # McGib" beside book 4's "Elle". Two people this book keeps apart
+        # are not merged by it, though.
+        to = {d: series_name(d) for d in set(names.values()) if not _is_hero(d, hero)}
+        forms: dict[str, list[str]] = {}
+        for d, t in to.items():
+            if t:
+                forms.setdefault(t, []).append(d)
 
-    rows, seen, met, said = [], set(), set(), {}
+        def apart(ds):
+            return any(frozenset((a, b)) in together
+                       for i, a in enumerate(ds) for b in ds[i + 1:])
+        # Several of this book's names for one remembered person ("Bea" and
+        # "Miss Beatrice" in DCC 3) are that person, unless a passage listed
+        # two of them side by side. Then only a name or alias the memory
+        # already holds is sure: book 4 listed "Princess Donut" beside "Donut".
+        shown = {d: t for d, t in to.items()
+                 if t and (not apart(forms[t]) or series_name(d, True) == t)}
+        names = {raw: shown.get(d, d) for raw, d in names.items()}
+
+    # the same words for two people in one passage are the model copying one
+    # line onto both (Louis and Firas M in DCC 4); neither is told by it
+    owners: dict[tuple, set] = {}
+    for _p, (order, _path, _para, _st, kind, text), name in raw:
+        if kind == "rel" and text and names.get(name) and not _is_hero(name, hero):
+            owners.setdefault((order, _tidy_key(text)), set()).add(names[name])
+    shared = {k for k, who in owners.items() if len(who) > 1}
+    # someone else's remembered line is not this person's either: Ferdinand
+    # was handed Donut's hand-written one
+    theirs = {_tidy_key(d): who for d, who in (series_lines or {}).items()}
+
+    rows, seen, met, said, tied = [], set(), set(), {}, set()
     for _p, (order, path, para, status, kind, text), name in sorted(raw, key=lambda r: r[0]):
         who = names.get(name)
         if not who or not text:
+            continue
+        if kind == "rel" and (order, _tidy_key(text)) in shared:
+            continue
+        if kind == "rel" and theirs.get(_tidy_key(text), who) != who:
             continue
         if kind == "intro" and who in seen:
             # introduced long ago; but if this is where the reader first meets
@@ -1148,8 +2096,15 @@ def _people_rows(got, hero, ctx, lang: str = "en"):
                 rows.append((order, path, para, who, "met", said[who]))
                 met.add(who)
             continue
+        if kind == "rel" and who in said and _scene_only(text) and \
+                not _scene_only(said[who]):
+            continue        # one scene does not replace who they are
+        if kind == "rel" and who in tied and UNLINKED.match(text):
+            continue        # nor does a passage that forgot the tie
         seen.add(who)
         said[who] = text
+        if kind == "rel" and not UNLINKED.match(text) and not _is_hero(who, hero):
+            tied.add(who)
         if status == "met":
             met.add(who)
         rows.append((order, path, para, who, status, text))
@@ -1238,7 +2193,7 @@ def _clean(s: str) -> str:
     return re.sub(r"[\t\r\n]+", " ", str(s)).strip()
 
 
-def _embed(book: Path, parts, people, chapters, cast, spine=(), meta=()) -> None:
+def _embed(book: Path, parts, people, chapters, cast, spine=(), meta=(), seen=()) -> None:
     """Write the TSVs into the book, in the manifest and never the spine.
 
     Declared so EPUBCheck does not call them undeclared resources; out of the
@@ -1256,6 +2211,10 @@ def _embed(book: Path, parts, people, chapters, cast, spine=(), meta=()) -> None
         "meta.tsv": "\n".join("%s\t%s" % (k, _clean(v)) for k, v in meta),
         "cast.tsv": "\n".join("%d\t%s\t%s\t%s" % (o, p, _clean(w), _clean(t))
                               for o, p, w, t in cast),
+        # where each person was last named: order, path, paragraph, name, the
+        # book's own sentence
+        "seen.tsv": "\n".join("%d\t%s\t%d\t%s\t%s" % (o, p, n, _clean(w), _clean(t))
+                              for o, p, n, w, t in seen),
     }
     # built in the system temp folder, never beside the book: a library
     # server watching that folder would import a stray .epub as a new book
@@ -1299,7 +2258,7 @@ def _embed(book: Path, parts, people, chapters, cast, spine=(), meta=()) -> None
             os.remove(tmp)
 
 
-_OURS = ("recaps", "cast", "parts", "people", "spine", "meta")
+_OURS = ("recaps", "cast", "parts", "people", "spine", "meta", "seen")
 
 
 def _is_ours(name: str, base: str) -> bool:

@@ -23,6 +23,25 @@ def opf_path(z):
     return re.search(r'full-path="([^"]+)"', c).group(1)
 
 
+def epub3_series(md):
+    """(series, index) from EPUB 3 belongs-to-collection metadata, the way
+    many shop books carry it with no calibre:series: (None, None) if none.
+    A collection marked as a set rather than a series is not one."""
+    refines = {}
+    for m in md.findall(OPF + 'meta'):
+        r = (m.get('refines') or '').lstrip('#')
+        if r and m.get('property'):
+            refines.setdefault(r, {})[m.get('property')] = (m.text or '').strip()
+    for m in md.findall(OPF + 'meta'):
+        if m.get('property') != 'belongs-to-collection' or not (m.text or '').strip():
+            continue
+        extra = refines.get(m.get('id') or '', {})
+        if extra.get('collection-type', 'series') != 'series':
+            continue
+        return m.text.strip(), extra.get('group-position') or None
+    return None, None
+
+
 def read(path):
     out = {'file': os.path.basename(path), 'size': os.path.getsize(path), 'problems': []}
     z = zipfile.ZipFile(path)
@@ -49,6 +68,9 @@ def read(path):
     metas = {m.get('name'): m.get('content') for m in md.findall(OPF + 'meta') if m.get('name')}
     out['series'] = metas.get('calibre:series')
     out['series_index'] = metas.get('calibre:series_index')
+    if not out['series']:
+        out['series'], idx = epub3_series(md)
+        out['series_index'] = out['series_index'] or idx
     out['calibre_junk'] = sorted(k for k in metas
                                  if k and k.startswith('calibre:')
                                  and k not in ('calibre:series', 'calibre:series_index'))

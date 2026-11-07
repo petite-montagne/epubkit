@@ -659,3 +659,145 @@ def _set_series(book, series):
                     b"</metadata>", b'<meta name="calibre:series" content="%s"/></metadata>'
                     % series.encode())
             z.writestr(info, data)
+
+
+# -- books told by turns -------------------------------------------------------
+
+def _turns_docs():
+    """Chapters titled by whose turn it is, as A Clash of Kings is."""
+    who = ["Tyrion", "Catelyn", "Jon", "Tyrion", "Catelyn", "Jon", "Arya", "Arya"]
+    return [(i, "c%d.xhtml" % i, name.upper(),
+             [(0, "That night %s looked at the fire, and %s said nothing. %s"
+               % (name, name, FILLER))])
+            for i, name in enumerate(who)]
+
+
+def test_a_book_told_by_turns_has_no_single_lead():
+    docs = _turns_docs()
+    assert R._viewpoints(docs)["Tyrion"] == 2
+    assert R._ensemble(docs, "Tyrion")
+
+
+def test_a_book_with_one_lead_is_not_told_by_turns():
+    docs = [(i, "c%d.xhtml" % i, "Chapter %d" % (i + 1),
+             [(0, "That night Harry looked at Ron, and then Harry laughed. " + FILLER)])
+            for i in range(8)]
+    assert not R._ensemble(docs, "Harry")
+    assert not R._ensemble(docs, "the narrator")
+
+
+def test_a_series_lead_who_has_gone_does_not_carry_over(tmp_path):
+    """A Clash of Kings kept Eddard, the lead of A Game of Thrones: half its
+    people came out "not yet connected to Eddard", who is dead by then."""
+    docs = _turns_docs()
+
+    class View:
+        lead, ensemble = "Eddard", False
+
+    class Rc:
+        main_character = ""
+
+    class Ctx:
+        notes = []
+
+        def note(self, text):
+            self.notes.append(text)
+
+    ctx = Ctx()
+    called = []
+    real = R._hero
+    R._hero = lambda *a, **k: called.append(1) or "Tyrion"
+    try:
+        assert R._lead_for(ctx, Rc(), View(), docs, "en", None) == ""
+    finally:
+        R._hero = real
+    assert called and "Eddard" in ctx.notes[0]
+    # a lead who is still there carries over, whoever the book opens on
+    View.lead = "Tyrion"
+    assert R._share("Tyrion", docs) < 0.5
+    View.lead = "Jon"
+    docs = [(i, "c", "Chapter", [(0, "Then Jon went out. " + FILLER)]) for i in range(8)]
+    assert R._lead_for(ctx, Rc(), View(), docs, "en", None) == "Jon"
+    # a series the memory knows is told by turns stays so, and "none" by hand
+    View.ensemble = True
+    assert R._lead_for(ctx, Rc(), View(), docs, "en", None) == ""
+    Rc.main_character = "none"
+    assert R._lead_for(ctx, Rc(), None, docs, "en", None) == ""
+
+
+def test_a_book_with_no_lead_asks_about_no_lead():
+    for lang in ("en", "fr"):
+        words = R.TEXT[lang]
+        parts = R._prompt_parts(words, "")
+        prompt = words["prompt"].format(text="T", before="", pov="", **parts)
+        assert "{" not in prompt and "not yet connected" not in prompt
+        assert "pas encore li" not in prompt
+        led = words["prompt"].format(text="T", before="", pov="",
+                                     **R._prompt_parts(words, "Wren"))
+        assert "Wren" in led and "{" not in led
+
+
+def test_ships_are_not_people():
+    assert "ships" in R.PROMPT and "navires" in R.PROMPT_FR
+
+
+def test_a_bundled_preview_of_the_next_book_is_not_read():
+    from epubkit.stages.recaps import _PREVIEW, _story_end
+    spine = ["OEBPS/hp01_cover.xhtml"] + ["OEBPS/hp01_ch%03d.xhtml" % i for i in range(1, 18)] + \
+        ["OEBPS/hp01_about.xhtml", "OEBPS/hp02_title.xhtml", "OEBPS/hp02_ch001.xhtml"]
+    assert _story_end(spine) == 18
+    plain = ["OEBPS/ch%02d.xhtml" % i for i in range(20)]
+    assert _story_end(plain) == 19
+    assert _PREVIEW.search("turn the page for a sneak peek at the next book")
+    assert not _PREVIEW.search("harry read on for hours, then turned the page")
+
+
+def test_numbered_file_names_are_not_another_book():
+    from epubkit.stages.recaps import _story_end
+    calibre = ["OEBPS/part%04d_split_%03d.xhtml" % (i // 4, i % 4) for i in range(98)]
+    assert _story_end(calibre) == 97
+    circe = ["OEBPS/s%03d-chapter.xhtml" % i for i in range(36)]
+    assert _story_end(circe) == 35
+
+
+def test_a_tape_records_every_reply_and_replays_it(tmp_path, monkeypatch):
+    from epubkit.stages import recaps as R
+
+    class P:
+        calls = 0
+
+        def complete(self, prompt, system=""):
+            P.calls += 1
+            return type("A", (), {"text": "answer to " + prompt})()
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EPUBKIT_TAPE", str(tmp_path / "tape"))
+    a = R._Answers(tmp_path / "book.epub", "m", enabled=False)
+    assert a.ask(P(), "q1", "s") == "answer to q1"
+    assert a.ask(P(), "q2", "s") == "answer to q2"
+    assert P.calls == 2
+    monkeypatch.delenv("EPUBKIT_TAPE")
+    monkeypatch.setenv("EPUBKIT_REPLAY", str(tmp_path / "tape"))
+    monkeypatch.setenv("EPUBKIT_REPLAY_ONLY", "1")
+    b = R._Answers(tmp_path / "book.epub", "m", enabled=False)
+    assert b.ask(P(), "q1", "s") == "answer to q1"
+    assert b.ask(P(), "q3", "s") == ""          # not on the tape: never asked
+    assert P.calls == 2 and (b.played, b.missed) == (1, 1)
+
+
+def test_a_replay_still_matches_a_passage_when_the_known_list_changed(tmp_path, monkeypatch):
+    from epubkit.stages import recaps as R
+
+    class P:
+        def complete(self, prompt, system=""):
+            return type("A", (), {"text": "reply"})()
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("EPUBKIT_TAPE", str(tmp_path / "tape"))
+    R._Answers(tmp_path / "b.epub", "m", enabled=False).ask(P(), "KNOWN: Carl\n<<<text>>>", "s")
+    monkeypatch.delenv("EPUBKIT_TAPE")
+    monkeypatch.setenv("EPUBKIT_REPLAY", str(tmp_path / "tape"))
+    monkeypatch.setenv("EPUBKIT_REPLAY_ONLY", "1")
+    b = R._Answers(tmp_path / "b.epub", "m", enabled=False)
+    assert b.ask(P(), "KNOWN: Carl, Donut\n<<<text>>>", "s") == "reply"
+    assert b.ask(P(), "KNOWN: Carl\n<<<other>>>", "s") == ""

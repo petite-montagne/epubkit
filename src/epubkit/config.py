@@ -76,6 +76,19 @@ class AIConfig:
     #: Ollama only: how long the model stays loaded after a request, so it is
     #: not reloaded between books. "" leaves it to Ollama (5 minutes).
     keep_alive: str = "30m"
+    #: local models only: a fixed seed (with top-k 1 and no reused prompt
+    #: cache) so the same book gives the same answers every run. -1 leaves
+    #: the server's own sampling.
+    seed: int = -1
+    #: local models only: the sampling the model's makers recommend. Qwen3.6
+    #: without thinking: temperature 0.7, top_p 0.8, top_k 20, min_p 0, and
+    #: "do not use greedy decoding" (temperature 0 / top-k 1 can degrade it
+    #: and make it repeat). A value below 0 is left to the server (top_k
+    #: then stays 1 with a seed, as before)
+    top_p: float = -1
+    top_k: int = -1
+    min_p: float = -1
+    presence_penalty: float = -1
 
     def resolved_model(self) -> str:
         return self.model or DEFAULT_MODEL.get(self.provider, "")
@@ -171,6 +184,57 @@ class RecapConfig:
     #: auto | en | fr. Auto reads the book: a French book gets French prompts
     #: and French wording throughout, an English one English
     language: str = "auto"
+    #: tell each passage who the reader has met so far in this book, and who
+    #: they are, so the who's who builds on itself instead of starting over
+    #: every few pages. Passages then go in batches of ai.concurrency
+    running_memory: bool = True
+    #: also give each passage the last few recaps, and the story so far from
+    #: the series memory. Off: only people are passed on, and the recap text
+    #: itself is written as before
+    running_story: bool = False
+    #: keep a memory file for each series (who is who to the main character,
+    #: the story so far) and give each book what the books before it built.
+    #: Needs the book's series and number; see epubkit/series_memory.py
+    series_memory: bool = True
+    #: where those files live; empty: ~/.local/share/epubkit/series
+    series_dir: str = ""
+    #: auto | yes | no - is the book told as "I" by its main character?
+    #: Auto reads the narration with the dialogue taken out
+    first_person: str = "auto"
+    #: keep the recap text a book already carries, word for word, and write
+    #: only the who's who again. A book without recaps is left alone
+    cast_only: bool = False
+    #: like cast_only for a book that has recaps; a book without them gets
+    #: recaps and a who's who in full
+    keep_recaps: bool = False
+    #: passages | book. How the who's who is written: from each passage's
+    #: answer as it goes (passages), or from the whole book at once - names
+    #: found in the text, one entry per person updated only when something
+    #: lasting changes, every entry checked against the book (book; see
+    #: epubkit/stages/cast.py); or facts: the series' names list decides who
+    #: is listed and entries are written from facts gathered chapter by
+    #: chapter (epubkit/stages/cast_facts.py; without a names list it is
+    #: "book"); or xray: chapter by chapter, code decides who is checked, the
+    #: model says what changed for each, and every change must quote the
+    #: book (epubkit/stages/cast_xray.py; English only, else "book"). Set
+    #: ai.seed too so runs repeat. With cast_only, "book", "facts" and
+    #: "xray" do not read the passages
+    cast_method: str = "passages"
+    #: with cast_method = "xray": read each part for lasting events first and
+    #: say whom they happened to after, keep an event only when the text
+    #: shows it happening and lasting and its quote is about that person,
+    #: and rewrite the whole entry from each kept event (one record per
+    #: person). Off: the model is asked about each listed name in turn
+    cast_events: bool = False
+    #: with cast_method = "xray": the ledger (stages/cast_xray.py, _Ledger):
+    #: a reading guide per book, one question for names and one for events
+    #: per part with worked examples, every change logged and decided per
+    #: person once the book is read, and a second look at anyone the book
+    #: keeps naming who has no change. Wins over cast_events
+    cast_ledger: bool = False
+    #: with cast_method = "book", write what it did with each book, and every
+    #: entry, to <this folder>/<book>.cast.txt. Empty: no report
+    cast_report_dir: str = ""
 
 
 @dataclass
